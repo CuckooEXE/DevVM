@@ -58,9 +58,25 @@ case "$MODE" in
 esac
 
 # ---------------------------------------------------------------------------
+# Self-heal: earlier versions of this script created cache/ via `sudo
+# install -d`, leaving it owned by root. That blocked setup.py (running
+# as the invoking user) from creating sibling cache/apt/, cache/github/,
+# etc. dirs. Chown it back before we do anything else.
+if [[ -d "$HERE/cache" ]] \
+   && [[ "$(stat -c '%u' "$HERE/cache")" != "$(id -u)" ]]; then
+    echo "bootstrap: $HERE/cache is owned by uid=$(stat -c '%u' "$HERE/cache"); chowning to $USER"
+    sudo chown -R "$(id -u):$(id -g)" "$HERE/cache"
+fi
+
+# ---------------------------------------------------------------------------
 do_prepare() {
     echo "bootstrap: prepare — caching apt prereqs under $CACHE_DEBS"
-    sudo install -d -m 0755 "$CACHE_DEBS" "$CACHE_DEBS/partial"
+    # Create the cache tree as the invoking user (not sudo). apt will run
+    # under sudo for the actual downloads; root can write .deb files into
+    # a user-owned dir just fine. If we sudo-created cache/ here instead,
+    # it would land owned by root:root 0755, and the user-run `setup.py`
+    # couldn't create sibling cache/apt/, cache/github/, etc. dirs.
+    mkdir -p "$CACHE_DEBS/partial"
 
     echo "bootstrap: apt-get update (required so --download-only can resolve)"
     sudo env DEBIAN_FRONTEND=noninteractive apt-get update

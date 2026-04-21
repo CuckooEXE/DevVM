@@ -2,8 +2,8 @@
 # End-to-end VM test harness.
 #
 # Boots a fresh Debian Trixie cloud image under QEMU, rsyncs the DevVMSetup
-# repo in, runs ./bootstrap.sh --mode full, then drops the invoking user
-# into an interactive SSH session on the VM for hands-on validation.
+# repo in, runs ./bootstrap.sh + python3 setup.py --mode full, then drops
+# the invoking user into an interactive SSH session for hands-on validation.
 #
 # Usage:
 #   tests/run-vm.sh [command] [--fresh] [--skip-install] [--memory N] [--cpus N]
@@ -25,7 +25,7 @@
 # Flags:
 #   --fresh          Force re-creation of the overlay disk (discard VM state).
 #   --skip-install   `up` only: boot + rsync repo + ssh, don't auto-run
-#                    bootstrap.sh. Use this to drive the installer by hand.
+#                    bootstrap.sh or setup.py. Drive the install by hand.
 #   --memory N       Guest RAM in GiB (default 8).
 #   --cpus N         Guest vCPUs (default 4).
 #   --port N         Host port forwarded to guest :22 (default 2222).
@@ -316,16 +316,17 @@ sync_repo() {
 
 # ---------------------------------------------------------------------------
 run_bootstrap() {
-    log "running bootstrap.sh --mode full inside the VM (this will take a while)…"
+    log "running bootstrap.sh + setup.py inside the VM (this will take a while)…"
     # -t for pty so apt/sudo prompts render and Ctrl-C propagates. We don't
     # care about exit code here — we want to drop the user into a shell
     # regardless so they can inspect whatever state the installer left.
+    # bootstrap.sh no longer execs setup.py, so chain them manually.
     if ssh "${ssh_opts[@]}" -t tester@127.0.0.1 \
-        'cd DevVMSetup && ./bootstrap.sh --mode full'
+        'cd DevVMSetup && ./bootstrap.sh full && python3 setup.py --mode full'
     then
-        ok "bootstrap finished successfully"
+        ok "install finished successfully"
     else
-        warn "bootstrap exited non-zero — opening a shell for inspection anyway"
+        warn "install exited non-zero — opening a shell for inspection anyway"
     fi
 }
 
@@ -352,7 +353,7 @@ cmd_up() {
     if (( ! SKIP_INSTALL )); then
         run_bootstrap
     else
-        log "--skip-install: repo synced to ~/DevVMSetup; run ./bootstrap.sh --mode full yourself"
+        log "--skip-install: repo synced to ~/DevVMSetup; run ./bootstrap.sh && python3 setup.py --mode full yourself"
     fi
     open_shell
 }

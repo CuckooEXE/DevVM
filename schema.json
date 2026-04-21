@@ -169,6 +169,22 @@
       }
     },
 
+    "fonts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "url", "install_dir"],
+        "properties": {
+          "name":             {"type": "string"},
+          "url":              {"type": "string", "format": "uri"},
+          "install_dir":      {"type": "string"},
+          "extract_pattern":  {"type": "string",
+                               "description": "glob of filenames to extract (default *.ttf)"}
+        }
+      }
+    },
+
     "vscode_extensions": {
       "type": "object",
       "additionalProperties": false,

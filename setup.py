@@ -27,6 +27,7 @@ SECTION_ORDER = [
     "git_sources",
     "docker",
     "docs",
+    "fonts",
     "vscode_extensions",
     "neovim_offline",
 ]

@@ -588,6 +588,14 @@ git_sources:
     dest: ~/src/dracula-terminator
     branch: master
 
+  # Oh My Zsh — cloned here only so the prepare step mirrors it into
+  # cache/git_sources/ohmyzsh.git. post/15-oh-my-zsh.sh then clones from
+  # that mirror to /usr/local/share/oh-my-zsh (sudo, outside git_sources'
+  # user-owned dest model), keeping the install fully offline-capable.
+  - url: https://github.com/ohmyzsh/ohmyzsh
+    dest: ~/src/ohmyzsh
+    branch: master
+
   # Example of a full-history clone (all branches, full commit history).
   # Uncomment and point at a repo where you actually want the full history:
   # - url: https://github.com/torvalds/linux
@@ -663,6 +671,16 @@ docs:
     - PostgreSQL
     - SQLite
     - Redis
+
+fonts:
+  # Installed system-wide (visible to every user). The JetBrainsMono Nerd
+  # Font is what Terminator, LazyVim icons, and agnoster all rely on. The
+  # prepare step caches the zip to cache/fonts/<name>/ so install runs
+  # fully offline.
+  - name: JetBrainsMono-Nerd
+    url: https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
+    install_dir: /usr/share/fonts/truetype/jetbrains-mono-nerd
+    extract_pattern: "*.ttf"
 
 vscode_extensions:
   # Installed via `code --install-extension` after `code` is on PATH.

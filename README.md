@@ -1,20 +1,38 @@
 # DevVMSetup
 
 Declarative, idempotent provisioner for a Debian Trixie dev/research VM.
-Edit `vmconfig.yaml`, run `./bootstrap.sh`, snapshot the VM.
+Edit `vmconfig.yaml`, run `./bootstrap.sh && python3 setup.py --mode full`,
+snapshot the VM.
 
-## Modes
+## Two-stage install
+
+`bootstrap.sh` handles only the host-level apt prereqs that `setup.py` itself
+needs to run (Python + PyYAML + jsonschema + gcc/make/unzip for staging).
+`setup.py` is the actual orchestrator — invoke it directly once bootstrap is
+done. Both scripts share a `prepare`/`install`/`full` split so a connected
+machine can produce a `cache/` bundle that coworkers pick up for an offline
+install.
 
 ```
-./bootstrap.sh --mode prepare   # online: download every artifact into ./cache/
-./bootstrap.sh --mode install   # offline: install from ./cache/ only
-./bootstrap.sh --mode full      # prepare + install (default)
-./bootstrap.sh --dry-run        # print actions without running them
+# on a connected machine — fills cache/ with everything needed
+./bootstrap.sh prepare            # downloads .debs to cache/bootstrap/debs/
+python3 setup.py --mode prepare   # downloads GitHub assets, docker images, …
+
+# ship cache/ + vmconfig.lock to the offline target machine, then:
+./bootstrap.sh install            # dpkg -i from cache/bootstrap/debs/
+python3 setup.py --mode install   # install everything else from cache/
+
+# or for a one-shot online run on a single machine:
+./bootstrap.sh                    # = prepare + install (default: full)
+python3 setup.py --mode full      # = prepare + install
 ```
+
+`setup.py --dry-run` prints the actions without executing them.
 
 ## Layout
 
-- `bootstrap.sh` — bash entrypoint, installs `python3 + PyYAML + jsonschema`, then execs `setup.py`.
+- `bootstrap.sh` — bash entrypoint for host apt prereqs (prepare/install/full).
+  Does **not** exec `setup.py` — users run that themselves.
 - `setup.py` — orchestrator (Python stdlib + PyYAML + jsonschema).
 - `vmconfig.yaml` — your config. Edit freely.
 - `schema.json` — JSON Schema validating `vmconfig.yaml`.
@@ -58,7 +76,7 @@ mirrors this project's
    downloads ~350 MB of tarballs, plugin source, and Mason packages).
 2. On the **offline** VM: the provisioner's `post/60-neovim-offline.sh` hook
    invokes `NeovimOffline/install.sh --force` automatically during
-   `bootstrap.sh --mode install`. It deploys the bundle into the invoking
+   `python3 setup.py --mode install`. It deploys the bundle into the invoking
    user's `$HOME` (`~/.config/nvim`, `~/.local/share/nvim{,-runtime}`,
    `~/.local/share/node`, `~/.local/share/jdk-21`) and appends
    `PATH` + `JAVA_HOME` exports to `~/.bashrc` + `~/.zshrc`.

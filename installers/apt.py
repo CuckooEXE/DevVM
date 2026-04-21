@@ -1,4 +1,10 @@
-"""apt installer: adds third-party repos, installs packages."""
+"""apt installer: adds third-party repos, installs packages.
+
+Offline story: prepare downloads all required .debs (plus their full
+transitive dep closure) into cache/apt/debs/. Install tries dpkg -i from
+that cache first and only falls through to online apt-get when the cache
+is empty. Same pattern as bootstrap.sh uses for its own apt prereqs.
+"""
 from __future__ import annotations
 
 import logging
@@ -16,12 +22,52 @@ SOURCES_DIR = Path("/etc/apt/sources.list.d")
 
 
 def prepare(section: dict, ctx) -> None:
-    """Download repo keys into cache/apt/keys/ so install mode can work offline."""
+    """Download repo keys + all package .debs into cache/apt/."""
     cache_keys = ctx.cache_dir / "apt" / "keys"
     cache_keys.mkdir(parents=True, exist_ok=True)
     for repo in section.get("repos", []) or []:
         dest = cache_keys / f"{repo['name']}.asc"
         http_download(repo["key_url"], dest)
+
+    packages = section.get("packages", []) or []
+    if not packages:
+        return
+
+    debs = ctx.cache_dir / "apt" / "debs"
+    # apt requires a partial/ subdir inside the archive cache.
+    ctx.run(["install", "-d", "-m", "0755", str(debs), str(debs / "partial")],
+            sudo=True)
+
+    # Repos need to be configured on the prepare host too — otherwise
+    # packages from docker-ce / vscode can't be resolved when we go to
+    # --download-only them. Wire repos and refresh apt.
+    _ensure_debian_components(
+        section.get("enable_components",
+                    ["main", "contrib", "non-free", "non-free-firmware"]),
+        ctx,
+    )
+    repos = section.get("repos", []) or []
+    if repos:
+        _install_repos(repos, ctx)
+    log.info("apt-get update (prepare: refresh indices before deb download)")
+    ctx.run(["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update"],
+            sudo=True, check=False)
+
+    # --reinstall forces apt to include pkgs already installed on the
+    # prepare host, so the cache is portable to a fresh coworker machine.
+    # Dir::Cache::Archives redirects the download dir for this invocation.
+    log.info("apt: caching %d pkgs (+ transitive deps) to %s",
+             len(packages), debs)
+    ctx.run([
+        "env", "DEBIAN_FRONTEND=noninteractive",
+        "apt-get", "install", "-y",
+        "--download-only", "--reinstall", "--no-install-recommends",
+        "-o", f"Dir::Cache::Archives={debs}",
+        *packages,
+    ], sudo=True)
+
+    # Let non-root users copy/rsync the cache bundle around later.
+    ctx.run(["chmod", "-R", "a+rX", str(debs)], sudo=True)
 
 
 def install(section: dict, ctx) -> None:
@@ -40,27 +86,51 @@ def install(section: dict, ctx) -> None:
     if repos:
         _install_repos(repos, ctx)
 
-    if packages:
-        missing = [p for p in packages if not dpkg_installed(p)]
-        if not missing:
-            log.info("all %d apt packages already installed", len(packages))
-        else:
-            if repos or missing:
-                ctx.run(
-                    ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update"],
-                    sudo=True,
-                )
-            _preseed_debconf(packages, ctx)
-            log.info("installing %d apt packages (%d missing)", len(packages), len(missing))
-            # run the full list so apt re-asserts held state; cheap.
-            # `env DEBIAN_FRONTEND=noninteractive` is the only reliable way to
-            # suppress debconf prompts — sudo strips env by default, so just
-            # exporting in the parent shell isn't enough.
-            ctx.run(
-                ["env", "DEBIAN_FRONTEND=noninteractive",
-                 "apt-get", "install", "-y", "--no-install-recommends", *packages],
-                sudo=True,
-            )
+    if not packages:
+        return
+
+    missing = [p for p in packages if not dpkg_installed(p)]
+    if not missing:
+        log.info("all %d apt packages already installed", len(packages))
+        return
+
+    _preseed_debconf(packages, ctx)
+
+    debs = ctx.cache_dir / "apt" / "debs"
+    deb_files = sorted(debs.glob("*.deb")) if debs.is_dir() else []
+    if deb_files:
+        log.info("installing %d apt packages from local .deb cache (%d files)",
+                 len(missing), len(deb_files))
+        # dpkg -i doesn't resolve deps by itself, but feeding it every
+        # cached .deb at once lets it sort them in dep order. Stragglers
+        # are patched up by `apt-get install -f`, pointed at our local
+        # cache so it doesn't need the network.
+        ctx.run(
+            ["env", "DEBIAN_FRONTEND=noninteractive",
+             "dpkg", "-i", *[str(p) for p in deb_files]],
+            sudo=True, check=False,
+        )
+        ctx.run(
+            ["env", "DEBIAN_FRONTEND=noninteractive",
+             "apt-get", "install", "-y", "-f", "--no-download",
+             "-o", f"Dir::Cache::Archives={debs}"],
+            sudo=True,
+        )
+    else:
+        log.info("no cached .debs at %s — falling back to online apt-get install",
+                 debs)
+        ctx.run(
+            ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update"],
+            sudo=True,
+        )
+        # run the full list so apt re-asserts held state; cheap.
+        # `env DEBIAN_FRONTEND=noninteractive` is the only reliable way to
+        # suppress debconf prompts — sudo strips env by default.
+        ctx.run(
+            ["env", "DEBIAN_FRONTEND=noninteractive",
+             "apt-get", "install", "-y", "--no-install-recommends", *packages],
+            sudo=True,
+        )
 
 
 def _preseed_debconf(packages: list[str], ctx) -> None:

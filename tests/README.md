@@ -1,8 +1,9 @@
 # End-to-end VM test
 
 `tests/run-vm.sh` boots a fresh Debian 13 Trixie cloud image under QEMU, runs
-`bootstrap.sh --mode full` inside it, and drops you into an interactive SSH
-shell on the provisioned VM so you can validate by hand.
+`./bootstrap.sh && python3 setup.py --mode full` inside it, and drops you
+into an interactive SSH shell on the provisioned VM so you can validate by
+hand.
 
 ## Prereqs (Debian 13 host)
 
@@ -63,7 +64,8 @@ overlay disk is recreated.
    host-forward of `127.0.0.1:2222 → guest:22`.
 5. Wait for cloud-init to finish.
 6. Rsync this repo to `~tester/DevVMSetup/` (skipping caches and `tests/.vm`).
-7. Run `./bootstrap.sh --mode full` over SSH — this is the real end-to-end.
+7. Run `./bootstrap.sh full && python3 setup.py --mode full` over SSH —
+   this is the real end-to-end.
 8. `exec ssh` into an interactive shell on the provisioned VM.
 
 ## Validating after install

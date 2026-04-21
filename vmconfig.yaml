@@ -1,0 +1,619 @@
+# yaml-language-server: $schema=./schema.json
+# vmconfig.yaml — your personal Debian Trixie VM. Edit freely, re-run bootstrap.sh.
+
+apt:
+  repos:
+    - name: docker
+      uri: https://download.docker.com/linux/debian
+      suite: trixie
+      components: [stable]
+      key_url: https://download.docker.com/linux/debian/gpg
+
+  packages:
+    # build / compilers
+    - build-essential
+    - gcc
+    - g++
+    - clang
+    - clang-tools
+    - clang-tidy
+    - clang-format
+    - lld
+    - lldb
+    - gdb
+    - gdb-multiarch
+    - cmake
+    - ninja-build
+    - meson
+    - pkg-config
+    - autoconf
+    - automake
+    - libtool
+
+    # languages (rustup + zig handled separately)
+    - python3
+    - python3-dev
+    - python3-venv
+    - python3-pip
+    - python3-setuptools       # needed for pip_system to build source dists
+    - pipx
+    - default-jdk
+    - maven
+    - gradle
+
+    # reverse engineering / binary analysis
+    - socat
+    - netcat-openbsd
+    - strace
+    - ltrace
+    # radare2 is out of Debian Trixie; build from source if you need it:
+    # https://github.com/radareorg/radare2. `rizin` (built from source in
+    # git_sources below) is the actively-maintained fork.
+    - edb-debugger             # Evan's debugger (ELF)
+    - ddd                      # GUI frontend for gdb
+    - qemu-user
+    - qemu-user-static
+    - qemu-system-x86
+    - qemu-system-arm
+    - qemu-system-mips
+    - qemu-utils
+    - patchelf
+    - upx-ucl
+    - hexedit
+    - bsdextrautils            # hexdump, col
+    - file
+    - binutils
+    # For cross-arch objdump/nm/readelf, install binutils-<target>, e.g.
+    # binutils-aarch64-linux-gnu, binutils-arm-linux-gnueabihf, binutils-mipsel-linux-gnu.
+    - elfutils
+    - apktool
+    - openssl
+    - nasm                     # assemblers
+    - yasm
+    - libc6-dbg                # glibc debug symbols (essential for gdb/gef)
+    - gcc-multilib             # build 32-bit binaries on 64-bit host
+    - g++-multilib
+    - musl-tools               # small static binaries
+    - valgrind
+    - checksec                 # binary hardening checker
+    # capstone (disassembler) — libcapstone-dev provides libs, headers, and the
+    # `cstool` binary. There is no separate 'cstool' package in Trixie.
+    - libcapstone-dev
+    # keystone (assembler) is not in Debian — built from source via git_sources below.
+    # cmake + ninja + build-essential above cover its build deps.
+
+    # fuzzing
+    - afl++                    # modern AFL++ fork (includes clang wrappers;
+                               # there is no separate afl++-clang in Trixie)
+    # honggfuzz is built from source in git_sources below — these are its deps:
+    - libbfd-dev
+    - libunwind-dev
+    # libfuseN for running the cutter AppImage (installed via github_releases)
+    - libfuse2t64
+    # libfuzzer ships with clang (already installed)
+
+    # pentesting / network recon
+    - nmap
+    - tcpdump
+    - wireshark
+    - tshark
+    - masscan                  # very fast port scanner
+    - proxychains4
+    - whois
+    - dnsutils                 # dig, nslookup
+    - ldap-utils
+    - smbclient
+    - samba-common-bin
+    - snmp
+    - snmp-mibs-downloader
+    - onesixtyone              # SNMP scanner
+    # enum4linux was dropped from Debian; use `enum4linux-ng` via pipx if needed.
+    - netdiscover
+    - arp-scan
+
+    # web app testing
+    # nikto was dropped from Debian Trixie (unmaintained); clone from
+    # https://github.com/sullo/nikto via git_sources if you still need it.
+    - sqlmap
+    - dirb
+    - wfuzz
+    - ffuf                     # fast web fuzzer (also available as github release; apt version is fine)
+    - whatweb                  # fingerprint web stacks
+
+    # password attacks (defensive research — CTFs, own-infra audits)
+    - hydra                    # THC-hydra (network logins)
+    - john                     # John the Ripper
+    - hashcat
+    - hashid
+    # wordlists live under git_sources (SecLists) because they're huge.
+
+    # wireless (optional; remove if your VM has no wifi adapter passthrough)
+    - aircrack-ng
+    - reaver
+
+    # post-exploitation helpers (defensive use in pentest engagements)
+    # `responder` was dropped from Debian; clone from
+    # https://github.com/lgandx/Responder via git_sources if you need it.
+
+    # forensics
+    - sleuthkit                # file system forensics (fls, icat, etc.)
+    - foremost                 # file carving
+    - scalpel                  # file carving
+    - libimage-exiftool-perl   # exiftool binary
+
+    # observability / kernel tracing (eBPF — great for RE of running systems)
+    - bpftrace
+    - linux-perf
+    - sysstat                  # iostat, pidstat, sar
+    - iotop
+    - iftop
+    - nethogs
+
+    # dev accelerators
+    - ccache                   # speeds up recompiles
+    - direnv                   # per-directory env
+    - entr                     # file-change runner
+    - moreutils                # sponge, ts, vidir, etc.
+
+    # docs & man
+    - man-db                   # provides `man`, `mandb`, `whatis`
+    - manpages
+    - manpages-dev
+    - manpages-posix
+    - manpages-posix-dev
+    - info
+    - texinfo
+    - cppreference-doc-en-html
+    - python3-doc
+    - linux-doc
+    - gcc-doc
+
+    # shell & utils
+    - zsh
+    - zsh-autosuggestions
+    - tmux
+    - neovim
+    - vim
+    - htop
+    - tree
+    - jq
+    - curl
+    - wget
+    - rsync
+    - git
+    - git-lfs
+    - unzip
+    - p7zip-full
+    - zstd
+    - ca-certificates
+    - gnupg
+
+    # docker (from the repo configured above)
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+
+    # offline doc viewer
+    - zeal
+
+pipx:
+  # Globally accessible CLI tools. `cz`, `poetry`, etc. end up on PATH.
+  packages:
+    # dev workflow
+    - commitizen               # cz
+    - poetry
+    - pre-commit
+    - ipython
+    - ruff
+    - black
+    - mypy
+    - uv
+    - httpie                   # `http` / `https` CLI
+
+    # RE / vuln research / pentest (CLI side)
+    - ropper                   # ROP gadget finder
+    - ROPgadget                # alternative ROP finder
+    - frida-tools              # frida CLI + helpers (frida, frida-ps, frida-trace)
+    - objection                # frida-based mobile runtime
+    - mitmproxy                # intercepting HTTPS proxy
+    - sslyze                   # TLS config auditor
+    - volatility3              # memory-image forensics (`vol`)
+    - yara                     # YARA rules CLI
+    - impacket                 # SMB/Kerberos scripts (secretsdump, psexec, etc.)
+    # NetExec (modern CrackMapExec replacement) is not on PyPI; install from git.
+    # pipx install accepts git+ URLs directly.
+    - git+https://github.com/Pennyw0rth/NetExec.git
+    - pipreqs                  # generate requirements.txt from imports
+
+pip_system:
+  # Libraries you want importable from a plain `python3` REPL.
+  # Uses --break-system-packages. Prefer pipx for CLI tools.
+  packages:
+    # exploitation / RE libraries
+    - pwntools
+    - capstone                 # python bindings (matches apt libcapstone)
+    - unicorn                  # CPU emulator python bindings
+    - keystone-engine          # assembler python bindings (pairs with kstool)
+    - lief                     # ELF/PE/Mach-O parser/modifier
+    - r2pipe                   # drive radare2 from python
+    - rzpipe                   # drive rizin from python
+    - z3-solver                # SMT solver (symbolic execution helpers)
+    - yara-python
+    - frida                    # frida python bindings
+
+    # network / web research
+    - scapy                    # packet crafting
+    - requests
+    - requests-toolbelt
+
+github_releases:
+  - repo: BurntSushi/ripgrep
+    asset_regex: 'ripgrep-.*-x86_64-unknown-linux-musl\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: rg, dest: /usr/local/bin/rg}
+    man:
+      - {src: doc/rg.1, dest: /usr/local/share/man/man1/rg.1}
+
+  - repo: sharkdp/fd
+    asset_regex: 'fd-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: fd, dest: /usr/local/bin/fd}
+
+  - repo: sharkdp/bat
+    asset_regex: 'bat-v.*-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: bat, dest: /usr/local/bin/bat}
+
+  - repo: junegunn/fzf
+    asset_regex: 'fzf-.*-linux_amd64\.tar\.gz$'
+    bin:
+      - {src: fzf, dest: /usr/local/bin/fzf}
+
+  - repo: dandavison/delta
+    asset_regex: 'delta-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: delta, dest: /usr/local/bin/delta}
+
+  - repo: eza-community/eza
+    asset_regex: 'eza_x86_64-unknown-linux-gnu\.tar\.gz$'
+    bin:
+      - {src: eza, dest: /usr/local/bin/eza}
+
+  - repo: jesseduffield/lazygit
+    asset_regex: 'lazygit_.*_linux_x86_64\.tar\.gz$'
+    bin:
+      - {src: lazygit, dest: /usr/local/bin/lazygit}
+
+  - repo: cli/cli
+    asset_regex: 'gh_.*_linux_amd64\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: bin/gh, dest: /usr/local/bin/gh}
+
+  - repo: starship/starship
+    asset_regex: 'starship-x86_64-unknown-linux-gnu\.tar\.gz$'
+    bin:
+      - {src: starship, dest: /usr/local/bin/starship}
+
+  # atuin — magical shell history (sqlite-backed, sync-capable)
+  - repo: atuinsh/atuin
+    asset_regex: 'atuin-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: atuin, dest: /usr/local/bin/atuin}
+
+  # --- recon / web testing (ProjectDiscovery suite + friends) ---
+
+  - repo: projectdiscovery/nuclei
+    asset_regex: 'nuclei_.*_linux_amd64\.zip$'
+    bin:
+      - {src: nuclei, dest: /usr/local/bin/nuclei}
+
+  - repo: projectdiscovery/httpx
+    asset_regex: 'httpx_.*_linux_amd64\.zip$'
+    bin:
+      # projectdiscovery's httpx clashes with the python `httpx` pkg — we
+      # rename the binary to `pdhttpx` to keep both usable.
+      - {src: httpx, dest: /usr/local/bin/pdhttpx}
+
+  - repo: projectdiscovery/subfinder
+    asset_regex: 'subfinder_.*_linux_amd64\.zip$'
+    bin:
+      - {src: subfinder, dest: /usr/local/bin/subfinder}
+
+  - repo: projectdiscovery/naabu
+    asset_regex: 'naabu_.*_linux_amd64\.zip$'
+    bin:
+      - {src: naabu, dest: /usr/local/bin/naabu}
+
+  - repo: projectdiscovery/katana
+    asset_regex: 'katana_.*_linux_amd64\.zip$'
+    bin:
+      - {src: katana, dest: /usr/local/bin/katana}
+
+  - repo: OJ/gobuster
+    asset_regex: 'gobuster_linux_x86_64\.tar\.gz$'
+    bin:
+      - {src: gobuster, dest: /usr/local/bin/gobuster}
+
+  - repo: jpillora/chisel
+    asset_regex: 'chisel_.*_linux_amd64\.gz$'
+    bin:
+      - {src: chisel, dest: /usr/local/bin/chisel}
+
+  # --- secrets scanners ---
+
+  - repo: trufflesecurity/trufflehog
+    asset_regex: 'trufflehog_.*_linux_amd64\.tar\.gz$'
+    bin:
+      - {src: trufflehog, dest: /usr/local/bin/trufflehog}
+
+  - repo: gitleaks/gitleaks
+    asset_regex: 'gitleaks_.*_linux_x64\.tar\.gz$'
+    bin:
+      - {src: gitleaks, dest: /usr/local/bin/gitleaks}
+
+  # --- dev utilities ---
+
+  - repo: casey/just
+    asset_regex: 'just-.*-x86_64-unknown-linux-musl\.tar\.gz$'
+    bin:
+      - {src: just, dest: /usr/local/bin/just}
+
+  - repo: watchexec/watchexec
+    asset_regex: 'watchexec-.*-x86_64-unknown-linux-musl\.tar\.xz$'
+    strip_components: 1
+    bin:
+      - {src: watchexec, dest: /usr/local/bin/watchexec}
+
+  - repo: sharkdp/hyperfine
+    asset_regex: 'hyperfine-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: hyperfine, dest: /usr/local/bin/hyperfine}
+
+  # tokei dropped prebuilt GitHub release assets as of v14.x. If you want
+  # code-stats, either `cargo install tokei` (after rustup), or swap in a
+  # binary-shipping alternative like `boyter/scc`.
+
+  - repo: jesseduffield/lazydocker
+    asset_regex: 'lazydocker_.*_linux_x86_64\.tar\.gz$'
+    bin:
+      - {src: lazydocker, dest: /usr/local/bin/lazydocker}
+
+  # cutter — RE GUI for rizin. Ships as an AppImage on GitHub releases.
+  # (libfuse2t64 was added to apt above so the AppImage runs.)
+  - repo: rizinorg/cutter
+    asset_regex: 'Cutter-.*-Linux-Qt5-x86_64.AppImage'
+    bin:
+      - {src: 'Cutter-*.AppImage', dest: /usr/local/bin/cutter}
+
+tarballs:
+  - name: zig
+    resolve: zig-index
+    url: https://ziglang.org/download/index.json
+    install_dir: /opt/zig
+    symlinks:
+      - {src: /opt/zig/current/zig, dest: /usr/local/bin/zig}
+
+  - name: ghidra
+    resolve: github-release
+    url: NationalSecurityAgency/ghidra
+    asset_regex: 'ghidra_.*_PUBLIC_.*\.zip$'
+    install_dir: /opt/ghidra
+    symlinks:
+      - {src: /opt/ghidra/current/ghidraRun, dest: /usr/local/bin/ghidraRun}
+
+rustup:
+  toolchains: [stable, nightly]
+  default: stable
+  components:
+    - rust-src
+    - rust-analyzer
+    - clippy
+    - rustfmt
+    - llvm-tools-preview
+  targets:
+    - x86_64-unknown-linux-musl
+    - wasm32-unknown-unknown
+
+git_sources:
+  # Each entry clones a repo to `dest`. The `depth` field controls history:
+  #   depth: 1    (default) shallow single-branch clone — fastest, smallest
+  #   depth: N    shallow clone with N commits of history on the target branch
+  #   depth: -1   FULL clone: every branch, every commit. Use when you want
+  #               to `git checkout <any-branch>` offline or really develop.
+  #
+  # Branch defaults to `main`. `post_install` runs shell commands in the
+  # destination dir after clone. `skip_if_command` skips post_install when
+  # the named executable is already on PATH (idempotency for builds).
+
+  # GEF — GDB Enhanced Features. Sourced from ~/.gdbinit.
+  - url: https://github.com/hugsy/gef
+    dest: ~/src/gef
+    branch: main
+    post_install:
+      - ln -sf "$PWD/gef.py" "$HOME/.gdbinit-gef.py"
+      - |
+        grep -qxF 'source ~/.gdbinit-gef.py' "$HOME/.gdbinit" 2>/dev/null \
+          || echo 'source ~/.gdbinit-gef.py' >> "$HOME/.gdbinit"
+
+  # GEF-Extras — additional commands/structures for GEF.
+  - url: https://github.com/hugsy/gef-extras
+    dest: ~/src/gef-extras
+    branch: main
+    post_install:
+      - |
+        # Wire GEF-Extras into gef via its settings file. Idempotent: only
+        # appends if the setting isn't already there.
+        CFG="$HOME/.gef.rc"
+        SCRIPTS_DIR="$PWD/scripts"
+        STRUCTS_DIR="$PWD/structs"
+        touch "$CFG"
+        grep -q "extra_plugins_dir" "$CFG" \
+          || printf '[gef]\nextra_plugins_dir = %s\n' "$SCRIPTS_DIR" >> "$CFG"
+        grep -q "glibc_tcache_count" "$CFG" || true
+
+  # Keystone — assembler. Not packaged in Debian; build from source to get kstool.
+  - url: https://github.com/keystone-engine/keystone
+    dest: ~/src/keystone
+    branch: master
+    skip_if_command: kstool
+    post_install:
+      - mkdir -p build
+      - |
+        cd build && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_LIBS_ONLY=0 -DLLVM_TARGETS_TO_BUILD=all ..
+      - cmake --build build --parallel
+      - sudo cmake --install build
+      - sudo ldconfig
+
+  # Rizin — actively maintained radare2 fork. Not in Trixie; build from source.
+  # Default branch is `dev`. Build system is meson + ninja.
+  - url: https://github.com/rizinorg/rizin
+    dest: ~/src/rizin
+    branch: dev
+    skip_if_command: rizin
+    post_install:
+      - meson setup build --buildtype=release
+      - ninja -C build
+      - sudo ninja -C build install
+      - sudo ldconfig
+
+  # honggfuzz — coverage-guided fuzzer. Not in Trixie; build with make.
+  # Needs libbfd-dev + libunwind-dev, which are added to apt packages above.
+  - url: https://github.com/google/honggfuzz
+    dest: ~/src/honggfuzz
+    branch: master
+    skip_if_command: honggfuzz
+    post_install:
+      - make
+      - sudo make install
+
+  # pwndbg — alternative GDB frontend (complements GEF)
+  - url: https://github.com/pwndbg/pwndbg
+    dest: ~/src/pwndbg
+    branch: dev
+    # (no post_install — user can run ./setup.sh manually when they want it)
+
+  # --- wordlists / payload collections / cheat sheets ---
+  # These are large (SecLists alone is ~1GB after clone). Each is a single
+  # branch so total disk is bounded. Set all_branches: true if you want the
+  # full history of one of them locally.
+
+  - url: https://github.com/danielmiessler/SecLists
+    dest: ~/sec/SecLists
+    branch: master           # default branch of this repo is 'master'
+
+  - url: https://github.com/swisskyrepo/PayloadsAllTheThings
+    dest: ~/sec/PayloadsAllTheThings
+    branch: master
+
+  - url: https://github.com/carlospolop/PEASS-ng
+    dest: ~/sec/PEASS-ng
+    branch: master
+
+  - url: https://github.com/GTFOBins/GTFOBins.github.io
+    dest: ~/sec/GTFOBins
+    branch: master
+
+  - url: https://github.com/LOLBAS-Project/LOLBAS
+    dest: ~/sec/LOLBAS
+    branch: master
+
+  - url: https://github.com/HackTricks-wiki/hacktricks
+    dest: ~/sec/hacktricks
+    branch: master
+
+  # --- misc RE / exploit references ---
+
+  - url: https://github.com/JonathanSalwan/ROPgadget
+    dest: ~/src/ROPgadget
+    branch: master
+    # (ROPgadget is also in pipx; git repo is handy for hacking on it)
+
+  - url: https://github.com/angr/angr
+    dest: ~/src/angr
+    branch: master
+    # (angr is heavy; install via `pip install angr` in a venv — the clone
+    # here is for reading the source / developing against it)
+
+  # Example of a full-history clone (all branches, full commit history).
+  # Uncomment and point at a repo where you actually want the full history:
+  # - url: https://github.com/torvalds/linux
+  #   dest: ~/src/linux
+  #   branch: master
+  #   depth: -1
+
+docker:
+  save_to_cache: true
+  images:
+    - debian:trixie
+    - debian:trixie-slim
+    - ubuntu:latest
+    - alpine:latest
+    - python:3
+    - python:3-slim
+    - node:lts
+    - golang:latest
+    - rust:latest
+    - eclipse-temurin:21
+    - redis:latest
+    - postgres:latest
+    - nginx:latest
+    - kalilinux/kali-rolling:latest
+    - remnux/remnux-distro:focal
+    # latest binwalk (v3+, Rust rewrite) ships as a docker image.
+    # post/40-binwalk-wrapper.sh drops a /usr/local/bin/binwalk shim that invokes it.
+    - refirmlabs/binwalk:latest
+
+    # --- offensive tooling in containers ---
+    - metasploitframework/metasploit-framework:latest
+    - mitmproxy/mitmproxy:latest
+    - owasp/zap2docker-stable:latest   # legacy name; update to softwaresecurityproject/zap-stable if pulls stop working
+
+    # --- intentionally vulnerable targets (for practice / research only) ---
+    - bkimminich/juice-shop:latest     # OWASP Juice Shop
+    - vulnerables/web-dvwa:latest      # DVWA
+    - webgoat/webgoat:latest           # OWASP WebGoat
+
+docs:
+  rebuild_mandb: true
+  rebuild_info: true
+  # Zeal docsets from Kapeli's CDN (go.kapeli.com/d/NAME). If a name 404s
+  # the installer logs a warning and skips — so speculative entries are
+  # harmless. Each docset is ~10-200 MB; this list is ~2-3 GB total.
+  zeal_docsets:
+    # Languages you work in
+    - C
+    - C++
+    - Rust
+    - Python_3
+    - Bash
+    # Languages you'll read 3rd-party source in
+    - Go
+    - Java
+    - JavaScript
+    - TypeScript
+    # System / Unix reference (valuable for RE)
+    - Man_Pages
+    # Build / infra tooling
+    - CMake
+    - GCC
+    - Docker
+    - Git
+    - Vim
+    # Quick-lookup references
+    - HTTP
+    - Markdown
+    - Regular_Expressions
+    # Databases
+    - PostgreSQL
+    - SQLite
+    - Redis

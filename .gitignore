@@ -1,0 +1,45 @@
+# Populated by `./bootstrap.sh --mode prepare`. Large, machine-specific.
+# `vmconfig.lock` in the repo root IS committed (pinned versions).
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Scratch / backup / logs
+*.log
+*.bak
+*.orig
+*.rej
+/tmp-*

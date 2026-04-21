@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=../schema.json
+# End-to-end test config. Pointed at by `./test.sh --e2e`, which runs the
+# whole bootstrap inside a fresh debian:trixie container. Every installer
+# type gets exercised at least once, with small/fast artifacts where
+# possible and real code paths where not.
+#
+# Expected runtime: ~5-7 minutes (dominated by rustup + zig + apt.repos).
+#
+# Not tested (need a real VM, not a container):
+#   - wireless / kernel-module / eBPF tooling
+#   - post-hooks that modify shell/docker-group state meaningfully
+#   - the full 140-package apt list (covered by the production config)
+
+apt:
+  # Exercises `apt.repos` (docker apt repo) as well as `apt.packages`.
+  repos:
+    - name: docker
+      uri: https://download.docker.com/linux/debian
+      suite: trixie
+      components: [stable]
+      key_url: https://download.docker.com/linux/debian/gpg
+
+  packages:
+    # Support infra used by other installers at prepare/install time:
+    - ca-certificates
+    - curl
+    - git
+    - pipx
+    - python3-pip
+    # docker-ce-cli is pure CLI (no daemon postinst) — the daemon lives on
+    # the host and is reached via the /var/run/docker.sock mount.
+    - docker-ce-cli
+    # A real sample package to confirm apt.install actually installed stuff:
+    - jq
+
+pipx:
+  packages:
+    - ruff          # small prebuilt wheel; fastest real pipx test
+
+pip_system:
+  packages:
+    - requests      # tiny, pure-python; faithful PEP-668 + --break-system-packages test
+
+github_releases:
+  - repo: sharkdp/hyperfine
+    asset_regex: 'hyperfine-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
+    strip_components: 1
+    bin:
+      - {src: hyperfine, dest: /usr/local/bin/hyperfine}
+
+tarballs:
+  # Real zig-index resolver: fetches the latest stable zig from ziglang.org
+  # (~45 MB). Exercises: resolve, download, extract, versioned install dir,
+  # symlink into /usr/local/bin. Same code path the production config uses.
+  - name: zig
+    resolve: zig-index
+    url: https://ziglang.org/download/index.json
+    install_dir: /opt/zig
+    symlinks:
+      - {src: /opt/zig/current/zig, dest: /usr/local/bin/zig}
+
+rustup:
+  # Minimal profile — stable toolchain only, no extra components/targets.
+  # Still ~120 MB but exercises the full rustup-init flow.
+  toolchains: [stable]
+  default: stable
+
+git_sources:
+  - url: https://github.com/GTFOBins/GTFOBins.github.io
+    dest: ~/test-clone-gtfobins
+    branch: master
+
+docker:
+  # Mount of /var/run/docker.sock gives the container access to the host's
+  # Docker daemon, so `docker pull` actually works. We pull hello-world
+  # (13 KB) to keep the footprint minimal. save_to_cache disabled — the
+  # tar would be inside the container filesystem only and get discarded.
+  save_to_cache: false
+  images:
+    - hello-world:latest
+
+docs:
+  rebuild_mandb: false
+  rebuild_info: false

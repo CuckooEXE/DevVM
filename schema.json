@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevVMSetup config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enable_components": {
+          "description": "Debian components to enable in /etc/apt/sources.list.d/debian.sources. Defaults to [main, contrib, non-free, non-free-firmware] when omitted.",
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "uri", "suite", "components", "key_url"],
+            "properties": {
+              "name":       {"type": "string", "pattern": "^[a-zA-Z0-9_.-]+$"},
+              "uri":        {"type": "string", "format": "uri"},
+              "suite":      {"type": "string"},
+              "components": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+              "key_url":    {"type": "string", "format": "uri"},
+              "arch":       {"type": "string"}
+            }
+          }
+        },
+        "packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
+    "pipx": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
+    "pip_system": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
+    "github_releases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repo", "asset_regex"],
+        "properties": {
+          "repo":            {"type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$"},
+          "asset_regex":     {"type": "string"},
+          "tag":             {"type": "string"},
+          "strip_components":{"type": "integer", "minimum": 0},
+          "bin": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["src", "dest"],
+              "properties": {
+                "src":  {"type": "string"},
+                "dest": {"type": "string"}
+              }
+            }
+          },
+          "man": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["src", "dest"],
+              "properties": {
+                "src":  {"type": "string"},
+                "dest": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "tarballs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "install_dir"],
+        "properties": {
+          "name":        {"type": "string"},
+          "url":         {"type": "string"},
+          "resolve":     {"enum": ["static", "github-release", "zig-index"]},
+          "asset_regex": {"type": "string"},
+          "install_dir": {"type": "string"},
+          "strip_components":{"type": "integer", "minimum": 0},
+          "symlinks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["src", "dest"],
+              "properties": {
+                "src":  {"type": "string"},
+                "dest": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "rustup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "toolchains": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "default":    {"type": "string"},
+        "components": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "targets":    {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
+    "git_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "dest"],
+        "properties": {
+          "name":         {"type": "string"},
+          "url":          {"type": "string"},
+          "dest":         {"type": "string"},
+          "branch":       {"type": "string"},
+          "depth": {
+            "description": "Clone depth. 1 (default) = shallow single-branch clone. N > 1 = last N commits of the target branch. -1 = full clone of all branches and all history (ability to `git checkout` any branch offline, with complete history).",
+            "type": "integer"
+          },
+          "post_install": {"type": "array", "items": {"type": "string"}},
+          "skip_if_command": {"type": "string"}
+        }
+      }
+    },
+
+    "docker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "save_to_cache": {"type": "boolean"},
+        "images":        {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
+    "docs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rebuild_mandb": {"type": "boolean"},
+        "rebuild_info":  {"type": "boolean"},
+        "zeal_docsets":  {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    }
+  }
+}

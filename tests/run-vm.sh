@@ -295,14 +295,6 @@ sync_repo() {
         --exclude='__pycache__/' \
         --exclude='cache/' \
         --exclude='tests/.vm/' \
-        --exclude='NeovimOffline/.stage/' \
-        --exclude='NeovimOffline/.downloads/' \
-        --exclude='NeovimOffline/bin/*.tar.gz' \
-        --exclude='NeovimOffline/bin/*.tar.xz' \
-        --exclude='NeovimOffline/jdk/*.tar.gz' \
-        --exclude='NeovimOffline/share/nvim/lazy/' \
-        --exclude='NeovimOffline/share/nvim/mason/' \
-        --exclude='NeovimOffline/share/nvim/site/' \
         -e "ssh ${ssh_opts[*]}" \
         "$REPO_DIR/" tester@127.0.0.1:DevVMSetup/
 
@@ -320,7 +312,6 @@ run_bootstrap() {
     # -t for pty so apt/sudo prompts render and Ctrl-C propagates. We don't
     # care about exit code here — we want to drop the user into a shell
     # regardless so they can inspect whatever state the installer left.
-    # bootstrap.sh no longer execs setup.py, so chain them manually.
     if ssh "${ssh_opts[@]}" -t tester@127.0.0.1 \
         'cd DevVMSetup && ./bootstrap.sh full && python3 setup.py --mode full'
     then

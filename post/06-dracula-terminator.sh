@@ -4,7 +4,7 @@
 # The dracula/terminator repo ships a snippet that belongs inside the
 # [profiles] section of the Terminator config. We generate a minimal
 # config that sets Dracula as the default profile and pairs it with the
-# JetBrainsMono Nerd Font installed by post/05-fonts.sh.
+# JetBrainsMono Nerd Font installed by the `fonts` section of setup.py.
 #
 # Idempotent: skips if the snippet is already present. We never touch an
 # existing config that doesn't have our marker, to avoid clobbering the

@@ -1,7 +1,45 @@
 # yaml-language-server: $schema=./schema.json
-# vmconfig.yaml — your personal Debian Trixie VM. Edit freely, re-run bootstrap.sh.
+#
+# vmconfig.yaml — declarative config for your Debian Trixie dev/research VM.
+#
+# This is the single source of truth that setup.py reads. Edit freely
+# (add/remove packages, pin a tarball version, swap a docker image) and
+# re-run the orchestrator.
+#
+# Typical flow:
+#   ./bootstrap.sh full            # install host apt prereqs for setup.py
+#   python3 setup.py --mode full   # prepare + install every section below
+#
+# Mode split (mirrors bootstrap.sh):
+#   --mode prepare   fetch artifacts into ./cache/   (online)
+#   --mode install   install from ./cache/ only      (can be offline)
+#   --mode full      prepare + install               (default)
+#
+# Useful flags:
+#   --only SECTION   limit run to a section; repeatable
+#   --skip SECTION   skip a section; repeatable (e.g. --skip github_releases
+#                    when GitHub API rate-limits you)
+#   --refresh        re-resolve 'latest' tags; ignore vmconfig.lock
+#   --dry-run        print actions without executing them
+#
+# Sections:
+#   apt                system packages + 3rd-party apt repos
+#   pipx               Python CLI tools globally on $PATH
+#   pip_system         Python libs importable from system python3
+#   github_releases    single-binary tools from GitHub releases
+#   tarballs           generic URL tarballs (Zig, Ghidra)
+#   rustup             Rust toolchains, components, targets
+#   git_sources        mirrored git clones (wordlists, source builds)
+#   docker             container images (docker pull + save to cache)
+#   docs               man-db/info rebuilds + zeal docsets
+#   fonts              system-wide font archives
+#   vscode_extensions  VSCode marketplace bundles
+#   neovim_offline     LazyVim bundle (see installers/neovim_offline/README.md)
 
 apt:
+  # 3rd-party apt repos. The `key_url` GPG key is fetched during prepare
+  # and installed under /etc/apt/keyrings/<name>.gpg; a matching entry is
+  # written to /etc/apt/sources.list.d/<name>.list.
   repos:
     - name: docker
       uri: https://download.docker.com/linux/debian
@@ -9,8 +47,6 @@ apt:
       components: [stable]
       key_url: https://download.docker.com/linux/debian/gpg
 
-    # Microsoft Visual Studio Code repo (provides the `code` package).
-    # arch=amd64 keeps the sources file single-arch — matching the VM target.
     - name: vscode
       uri: https://packages.microsoft.com/repos/code
       suite: stable
@@ -18,257 +54,258 @@ apt:
       arch: amd64
       key_url: https://packages.microsoft.com/keys/microsoft.asc
 
+  # apt packages. Transitive deps pull in automatically — you only list
+  # the headline packages. Inline comments are quick usage hints.
   packages:
-    # build / compilers
-    - build-essential
-    - gcc
-    - g++
-    - clang
-    - clang-tools
-    - clang-tidy
-    - clang-format
-    - lld
-    - lldb
-    - gdb
-    - gdb-multiarch
-    - cmake
-    - ninja-build
-    - meson
-    - pkg-config
-    - autoconf
+
+    # ── Build / compilers ────────────────────────────────────────────
+    # C/C++ toolchains, build systems, autotools.
+    - build-essential           # gcc + g++ + make + libc-dev meta
+    - gcc                       # gcc -O2 -o hello hello.c
+    - g++                       # g++ -std=c++20 -o app app.cpp
+    - clang                     # clang -O2 -o hello hello.c
+    - clang-tools               # clangd (LSP), scan-build
+    - clang-tidy                # clang-tidy src/*.cpp --checks='*'
+    - clang-format              # clang-format -i src/*.cpp
+    - lld                       # clang -fuse-ld=lld
+    - lldb                      # lldb ./a.out
+    - gdb                       # gdb ./a.out
+    - gdb-multiarch             # gdb-multiarch for cross-arch debugging
+    - cmake                     # cmake -B build && cmake --build build
+    - ninja-build               # ninja -C build
+    - meson                     # meson setup build && meson compile -C build
+    - pkg-config                # pkg-config --cflags --libs glib-2.0
+    - autoconf                  # autoreconf -i && ./configure
     - automake
     - libtool
 
-    # languages (rustup + zig handled separately)
-    - python3
-    - python3-dev
-    - python3-venv
-    - python3-pip
-    - python3-setuptools       # needed for pip_system to build source dists
-    - pipx
-    - default-jdk
-    - maven
-    - gradle
+    # ── Languages (non-Rust, non-Zig) ────────────────────────────────
+    # rustup/Zig are handled in their own sections below.
+    - python3                   # python3 -c 'print("hi")'
+    - python3-dev               # headers for building C extensions
+    - python3-venv              # python3 -m venv .venv
+    - python3-pip               # pip install <pkg>  (prefer pipx/pip_system)
+    - python3-setuptools        # required by pip_system for sdists
+    - pipx                      # pipx install <cli>
+    - default-jdk               # javac Hello.java && java Hello
+    - maven                     # mvn package
+    - gradle                    # gradle build
 
-    # reverse engineering / binary analysis
-    - socat
-    - netcat-openbsd
-    - strace
-    - ltrace
-    # radare2 is out of Debian Trixie; build from source if you need it:
-    # https://github.com/radareorg/radare2. `rizin` (built from source in
-    # git_sources below) is the actively-maintained fork.
-    - edb-debugger             # Evan's debugger (ELF)
-    - ddd                      # GUI frontend for gdb
-    - qemu-user
-    - qemu-user-static
-    - qemu-system-x86
-    - qemu-system-arm
-    - qemu-system-mips
-    - qemu-utils
-    - patchelf
-    - upx-ucl
-    - hexedit
-    - bsdextrautils            # hexdump, col
-    - file
-    - binutils
-    # For cross-arch objdump/nm/readelf, install binutils-<target>, e.g.
-    # binutils-aarch64-linux-gnu, binutils-arm-linux-gnueabihf, binutils-mipsel-linux-gnu.
-    - elfutils
-    - apktool
-    - openssl
-    - nasm                     # assemblers
-    - yasm
-    - libc6-dbg                # glibc debug symbols (essential for gdb/gef)
-    - gcc-multilib             # build 32-bit binaries on 64-bit host
-    - g++-multilib
-    - musl-tools               # small static binaries
-    - valgrind
-    - checksec                 # binary hardening checker
-    # capstone (disassembler): libcapstone-dev ships libs+headers only; the
-    # `cstool` CLI lives in the separate `capstone-tool` package on Trixie.
-    - libcapstone-dev
-    - capstone-tool
-    # keystone (assembler) is not in Debian — built from source via git_sources below.
-    # cmake + ninja + build-essential above cover its build deps.
+    # ── Reverse engineering / binary analysis ────────────────────────
+    # Rizin (radare2 fork), Cutter, keystone, and honggfuzz are built
+    # from source via git_sources — they're not packaged for Trixie.
+    - socat                     # socat TCP-LISTEN:4444,reuseaddr,fork EXEC:/bin/sh
+    - netcat-openbsd            # nc -lvnp 4444
+    - strace                    # strace -f -e openat ./a.out
+    - ltrace                    # ltrace ./a.out
+    - edb-debugger              # edb --run ./a.out   (ELF debugger, GUI)
+    - ddd                       # ddd ./a.out         (GUI frontend for gdb)
+    - qemu-user                 # qemu-aarch64 ./arm-bin   (user-mode emulation)
+    - qemu-user-static          # statically-linked qemu-* for binfmt
+    - qemu-system-x86           # qemu-system-x86_64 -hda disk.img
+    - qemu-system-arm           # qemu-system-aarch64 -M virt -kernel Image
+    - qemu-system-mips          # qemu-system-mips -kernel vmlinux
+    - qemu-utils                # qemu-img info disk.qcow2
+    - patchelf                  # patchelf --set-interpreter /lib/ld-linux.so.2 ./bin
+    - upx-ucl                   # upx -d packed-bin
+    - hexedit                   # hexedit file.bin
+    - bsdextrautils             # hexdump -C file.bin
+    - file                      # file suspicious-blob
+    - binutils                  # objdump -d, nm, strings, readelf, ld
+    - elfutils                  # eu-readelf -a ./bin; eu-addr2line
+    - apktool                   # apktool d app.apk
+    - openssl                   # openssl x509 -in cert.pem -text
+    - nasm                      # nasm -f elf64 shellcode.asm
+    - yasm                      # yasm -f elf64 shellcode.asm
+    - libc6-dbg                 # glibc debug symbols (required by gef)
+    - gcc-multilib              # gcc -m32 for 32-bit binaries
+    - g++-multilib              # g++ -m32
+    - musl-tools                # musl-gcc -static -o tiny hello.c
+    - valgrind                  # valgrind --leak-check=full ./a.out
+    - checksec                  # checksec --file=./bin
+    - libcapstone-dev           # libs + headers for capstone (disassembler)
+    - capstone-tool             # cstool x64 "48 83 ec 08"
 
-    # fuzzing
-    - afl++                    # modern AFL++ fork (includes clang wrappers;
-                               # there is no separate afl++-clang in Trixie)
-    # honggfuzz is built from source in git_sources below — these are its deps:
-    - libbfd-dev
-    - libunwind-dev
-    # libfuseN for running the cutter AppImage (installed via github_releases)
-    - libfuse2t64
-    # libfuzzer ships with clang (already installed)
+    # ── Fuzzing ──────────────────────────────────────────────────────
+    # honggfuzz is built from git_sources below and uses libbfd-dev +
+    # libunwind-dev at link time.
+    - afl++                     # afl-fuzz -i in -o out -- ./target @@
+    - libbfd-dev                # honggfuzz link dep
+    - libunwind-dev             # honggfuzz link dep
+    - libfuse2t64               # lets the Cutter AppImage (github_releases) run
 
-    # pentesting / network recon
-    - nmap
-    - tcpdump
-    - wireshark
-    - tshark
-    - masscan                  # very fast port scanner
-    - proxychains4
-    - whois
-    - dnsutils                 # dig, nslookup
-    - ldap-utils
-    - smbclient
-    - samba-common-bin
-    - snmp
-    - snmp-mibs-downloader
-    - onesixtyone              # SNMP scanner
-    # enum4linux was dropped from Debian; use `enum4linux-ng` via pipx if needed.
-    - netdiscover
-    - arp-scan
+    # ── Pentesting / network recon ───────────────────────────────────
+    # nikto, Responder, and enum4linux-ng come from git_sources/pipx.
+    - nmap                      # nmap -sV -A -p- 10.0.0.1
+    - tcpdump                   # tcpdump -i any -n port 80
+    - wireshark                 # wireshark           (GUI)
+    - tshark                    # tshark -i any -Y http
+    - masscan                   # masscan 10.0.0.0/24 -p80,443 --rate=10000
+    - proxychains4              # proxychains4 curl https://target
+    - whois                     # whois example.com
+    - dnsutils                  # dig example.com; nslookup example.com
+    - ldap-utils                # ldapsearch -x -H ldap://host -b dc=x
+    - smbclient                 # smbclient -L //host -U user
+    - samba-common-bin          # nmblookup, net
+    - snmp                      # snmpwalk -v2c -c public 10.0.0.1
+    - snmp-mibs-downloader      # populates /var/lib/mibs for snmpwalk -m
+    - onesixtyone               # onesixtyone -c communities.txt 10.0.0.0/24
+    - netdiscover               # netdiscover -i eth0 -r 192.168.1.0/24
+    - arp-scan                  # arp-scan --localnet
 
-    # web app testing
-    # nikto was dropped from Debian Trixie (unmaintained); clone from
-    # https://github.com/sullo/nikto via git_sources if you still need it.
-    - sqlmap
-    - dirb
-    - wfuzz
-    - ffuf                     # fast web fuzzer (also available as github release; apt version is fine)
-    - whatweb                  # fingerprint web stacks
+    # ── Web-app testing ──────────────────────────────────────────────
+    - sqlmap                    # sqlmap -u 'https://t/?id=1' --batch
+    - dirb                      # dirb https://target wordlist.txt
+    - wfuzz                     # wfuzz -c -z file,words.txt 'https://t/FUZZ'
+    - ffuf                      # ffuf -u 'https://t/FUZZ' -w words.txt
+    - whatweb                   # whatweb https://target
 
-    # password attacks (defensive research — CTFs, own-infra audits)
-    - hydra                    # THC-hydra (network logins)
-    - john                     # John the Ripper
-    - hashcat
-    - hashid
-    # wordlists live under git_sources (SecLists) because they're huge.
+    # ── Password attacks ─────────────────────────────────────────────
+    # Defensive use only: CTFs, your own infra, authorized engagements.
+    # Wordlists (SecLists) live under git_sources; too large for apt.
+    - hydra                     # hydra -l admin -P rockyou.txt ssh://10.0.0.1
+    - john                      # john --wordlist=rockyou.txt hashes.txt
+    - hashcat                   # hashcat -m 1000 hashes.txt rockyou.txt
+    - hashid                    # hashid <hash>
 
-    # wireless (optional; remove if your VM has no wifi adapter passthrough)
-    - aircrack-ng
-    - reaver
+    # ── Wireless ─────────────────────────────────────────────────────
+    # Drop these if the VM has no wifi passthrough.
+    - aircrack-ng               # aircrack-ng -w rockyou.txt capture.cap
+    - reaver                    # reaver -i wlan0mon -b BSSID -vv
 
-    # post-exploitation helpers (defensive use in pentest engagements)
-    # `responder` was dropped from Debian; clone from
-    # https://github.com/lgandx/Responder via git_sources if you need it.
+    # ── Forensics ────────────────────────────────────────────────────
+    - sleuthkit                 # fls, icat, mmls (filesystem forensics)
+    - foremost                  # foremost -t all -i disk.img -o out
+    - scalpel                   # scalpel -c scalpel.conf -o out disk.img
+    - libimage-exiftool-perl    # exiftool photo.jpg
 
-    # forensics
-    - sleuthkit                # file system forensics (fls, icat, etc.)
-    - foremost                 # file carving
-    - scalpel                  # file carving
-    - libimage-exiftool-perl   # exiftool binary
+    # ── Observability / kernel tracing ───────────────────────────────
+    - bpftrace                  # bpftrace -e 'tracepoint:syscalls:sys_enter_openat { ... }'
+    - linux-perf                # perf record -g ./a.out; perf report
+    - sysstat                   # iostat -xz 1; pidstat -u 1; sar -u 1
+    - iotop                     # iotop
+    - iftop                     # iftop -i eth0
+    - nethogs                   # nethogs
 
-    # observability / kernel tracing (eBPF — great for RE of running systems)
-    - bpftrace
-    - linux-perf
-    - sysstat                  # iostat, pidstat, sar
-    - iotop
-    - iftop
-    - nethogs
+    # ── Dev accelerators ─────────────────────────────────────────────
+    - ccache                    # export CC='ccache gcc'
+    - direnv                    # echo 'export X=1' > .envrc && direnv allow
+    - entr                      # ls *.c | entr -c make
+    - moreutils                 # sponge, ts, vidir, chronic, parallel
 
-    # dev accelerators
-    - ccache                   # speeds up recompiles
-    - direnv                   # per-directory env
-    - entr                     # file-change runner
-    - moreutils                # sponge, ts, vidir, etc.
+    # ── Docs / man ───────────────────────────────────────────────────
+    - man-db                    # man <topic>; mandb; whatis <topic>
+    - manpages                  # base section 1-8 manpages
+    - manpages-dev              # section 2/3 dev manpages (syscalls, libc)
+    - manpages-posix            # POSIX section 1p manpages
+    - manpages-posix-dev        # POSIX section 3p manpages
+    - info                      # info <topic>
+    - texinfo                   # makeinfo foo.texi
+    - cppreference-doc-en-html  # /usr/share/cppreference/doc/html/index.html
+    - python3-doc               # /usr/share/doc/python3-doc
+    - linux-doc                 # /usr/share/doc/linux-doc
+    - gcc-doc                   # info gcc
 
-    # docs & man
-    - man-db                   # provides `man`, `mandb`, `whatis`
-    - manpages
-    - manpages-dev
-    - manpages-posix
-    - manpages-posix-dev
-    - info
-    - texinfo
-    - cppreference-doc-en-html
-    - python3-doc
-    - linux-doc
-    - gcc-doc
+    # ── Shell / general utilities ────────────────────────────────────
+    - zsh                       # zsh
+    - zsh-autosuggestions       # sourced by post/10-shell.sh
+    - tmux                      # tmux new -s work
+    - terminator                # terminator            (preferred terminal)
+    - neovim                    # nvim <file>           (base apt version)
+    - vim                       # vim <file>
+    - htop                      # htop
+    - tree                      # tree -L 2
+    - jq                        # curl -s api/ | jq '.items[0]'
+    - curl                      # curl -sSL https://example.com
+    - wget                      # wget -c https://...
+    - rsync                     # rsync -avz src/ host:dest/
+    - git                       # git status
+    - git-lfs                   # git lfs track '*.bin'
+    - unzip                     # unzip file.zip
+    - p7zip-full                # 7z x file.7z
+    - zstd                      # zstd -19 file
+    - ca-certificates           # /etc/ssl/certs, updated by apt
+    - gnupg                     # gpg --verify file.sig file
+    - apt-transport-https       # HTTPS transport for apt (Microsoft repo)
+    - fontconfig                # fc-cache -f <dir>  (drives the fonts section)
 
-    # shell & utils
-    - zsh
-    - zsh-autosuggestions
-    - tmux
-    - terminator               # preferred terminal emulator
-    - neovim
-    - vim
-    - htop
-    - tree
-    - jq
-    - curl
-    - wget
-    - rsync
-    - git
-    - git-lfs
-    - unzip
-    - p7zip-full
-    - zstd
-    - ca-certificates
-    - gnupg
-    - apt-transport-https      # required for the Microsoft vscode apt repo
-    - fontconfig               # fc-cache (used by post/05-fonts.sh)
+    # ── Docker engine (from the docker repo above) ───────────────────
+    - docker-ce                 # docker run hello-world
+    - docker-ce-cli             # docker ps
+    - containerd.io             # OCI runtime (used by dockerd)
+    - docker-buildx-plugin      # docker buildx build --platform linux/arm64 .
+    - docker-compose-plugin     # docker compose up -d
 
-    # docker (from the repo configured above)
-    - docker-ce
-    - docker-ce-cli
-    - containerd.io
-    - docker-buildx-plugin
-    - docker-compose-plugin
+    # ── Editor (from the vscode repo above) ──────────────────────────
+    # The .deb postinst asks whether to install the Microsoft apt repo;
+    # we already added it declaratively, so installers/apt.py preseeds
+    # `code/add-microsoft-repo boolean false` to suppress the prompt.
+    - code                      # code <dir>
 
-    # VSCode (from the Microsoft repo configured above). The .deb postinst
-    # asks whether to add the Microsoft apt repo — we answer "no" via
-    # debconf-set-selections in installers/apt.py because the repo is
-    # already wired up declaratively.
-    - code
-
-    # offline doc viewer
-    - zeal
+    # ── Offline doc viewer ───────────────────────────────────────────
+    - zeal                      # zeal  (GUI for the docs.zeal_docsets below)
 
 pipx:
-  # Globally accessible CLI tools. `cz`, `poetry`, etc. end up on PATH.
+  # Python CLI tools, each in its own venv, globally on $PATH.
   packages:
-    # dev workflow
-    - commitizen               # cz
-    - poetry
-    - pre-commit
-    - ipython
-    - ruff
-    - black
-    - mypy
-    - uv
-    - httpie                   # `http` / `https` CLI
 
-    # RE / vuln research / pentest (CLI side)
-    - ropper                   # ROP gadget finder
-    - ROPgadget                # alternative ROP finder
-    - frida-tools              # frida CLI + helpers (frida, frida-ps, frida-trace)
-    - objection                # frida-based mobile runtime
-    - mitmproxy                # intercepting HTTPS proxy
-    - sslyze                   # TLS config auditor
-    - volatility3              # memory-image forensics (`vol`)
-    - yara                     # YARA rules CLI
-    - impacket                 # SMB/Kerberos scripts (secretsdump, psexec, etc.)
-    # NetExec (modern CrackMapExec replacement) is not on PyPI; install from git.
-    # pipx install accepts git+ URLs directly.
-    - git+https://github.com/Pennyw0rth/NetExec.git
-    - pipreqs                  # generate requirements.txt from imports
+    # ── Dev workflow ─────────────────────────────────────────────────
+    - commitizen                # cz commit
+    - poetry                    # poetry new myproj
+    - pre-commit                # pre-commit run --all-files
+    - ipython                   # ipython
+    - ruff                      # ruff check .; ruff format .
+    - black                     # black src/
+    - mypy                      # mypy src/
+    - uv                        # uv pip install foo   (fast pip replacement)
+    - httpie                    # http GET example.com
+
+    # ── RE / vuln research / pentest CLIs ────────────────────────────
+    - ropper                    # ropper --file ./bin --search 'pop rdi'
+    - ROPgadget                 # ROPgadget --binary ./bin
+    - frida-tools               # frida-trace -U -i open com.target.app
+    - objection                 # objection -g com.target.app explore
+    - mitmproxy                 # mitmproxy -p 8080
+    - sslyze                    # sslyze example.com
+    - volatility3               # vol -f mem.raw windows.info
+    - yara                      # yara rules.yar ./sample
+    - impacket                  # impacket-secretsdump user@host
+    - enum4linux-ng             # enum4linux-ng -A 10.0.0.1
+    - pipreqs                   # pipreqs ./project    (reqs.txt from imports)
+
+    # NetExec (CrackMapExec's maintained fork) is not on PyPI; install
+    # directly from the git repo (pipx accepts git+URL specs).
+    - git+https://github.com/Pennyw0rth/NetExec.git  # nxc smb 10.0.0.0/24
 
 pip_system:
-  # Libraries you want importable from a plain `python3` REPL.
-  # Uses --break-system-packages. Prefer pipx for CLI tools.
+  # Python libraries importable from any `python3` REPL. Installed with
+  # --break-system-packages. For CLI tools use pipx instead.
   packages:
-    # exploitation / RE libraries
-    - pwntools
-    - capstone                 # python bindings (matches apt libcapstone)
-    - unicorn                  # CPU emulator python bindings
-    - keystone-engine          # assembler python bindings (pairs with kstool)
-    - lief                     # ELF/PE/Mach-O parser/modifier
-    - r2pipe                   # drive radare2 from python
-    - rzpipe                   # drive rizin from python
-    - z3-solver                # SMT solver (symbolic execution helpers)
-    - yara-python
-    - frida                    # frida python bindings
 
-    # network / web research
-    - scapy                    # packet crafting
-    - requests
-    - requests-toolbelt
+    # ── Exploitation / RE ────────────────────────────────────────────
+    - pwntools                  # from pwn import *
+    - capstone                  # from capstone import *
+    - unicorn                   # from unicorn import Uc
+    - keystone-engine           # from keystone import Ks
+    - lief                      # import lief; lief.parse('bin')
+    - r2pipe                    # import r2pipe; r2pipe.open('bin')
+    - rzpipe                    # import rzpipe; rzpipe.open('bin')
+    - z3-solver                 # from z3 import *
+    - yara-python               # import yara; yara.compile(...)
+    - frida                     # import frida
+
+    # ── Network / web research ───────────────────────────────────────
+    - scapy                     # from scapy.all import *
+    - requests                  # import requests
+    - requests-toolbelt         # from requests_toolbelt import MultipartEncoder
 
 github_releases:
-  - repo: BurntSushi/ripgrep
+  # Single-binary tools from GitHub Releases. Each entry resolves the
+  # latest tag, caches the archive under cache/github/, then installs
+  # the declared `bin:` / `man:` files. Re-run with --refresh to bump.
+
+  # ── Daily-driver CLIs ──────────────────────────────────────────────
+  - repo: BurntSushi/ripgrep              # rg -nF 'TODO' src/
     asset_regex: 'ripgrep-.*-x86_64-unknown-linux-musl\.tar\.gz$'
     strip_components: 1
     bin:
@@ -276,152 +313,146 @@ github_releases:
     man:
       - {src: doc/rg.1, dest: /usr/local/share/man/man1/rg.1}
 
-  - repo: sharkdp/fd
+  - repo: sharkdp/fd                      # fd -e rs
     asset_regex: 'fd-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: fd, dest: /usr/local/bin/fd}
 
-  - repo: sharkdp/bat
+  - repo: sharkdp/bat                     # bat src/main.rs
     asset_regex: 'bat-v.*-x86_64-unknown-linux-gnu\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: bat, dest: /usr/local/bin/bat}
 
-  - repo: junegunn/fzf
+  - repo: junegunn/fzf                    # vim $(fzf)
     asset_regex: 'fzf-.*-linux_amd64\.tar\.gz$'
     bin:
       - {src: fzf, dest: /usr/local/bin/fzf}
 
-  - repo: dandavison/delta
+  - repo: dandavison/delta                # git diff (configure as core.pager)
     asset_regex: 'delta-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: delta, dest: /usr/local/bin/delta}
 
-  - repo: eza-community/eza
+  - repo: eza-community/eza               # eza -la --git
     asset_regex: 'eza_x86_64-unknown-linux-gnu\.tar\.gz$'
     bin:
       - {src: eza, dest: /usr/local/bin/eza}
 
-  - repo: jesseduffield/lazygit
+  - repo: jesseduffield/lazygit           # lazygit
     asset_regex: 'lazygit_.*_linux_x86_64\.tar\.gz$'
     bin:
       - {src: lazygit, dest: /usr/local/bin/lazygit}
 
-  - repo: cli/cli
+  - repo: cli/cli                         # gh pr create
     asset_regex: 'gh_.*_linux_amd64\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: bin/gh, dest: /usr/local/bin/gh}
 
-  - repo: starship/starship
+  - repo: starship/starship               # eval "$(starship init zsh)"
     asset_regex: 'starship-x86_64-unknown-linux-gnu\.tar\.gz$'
     bin:
       - {src: starship, dest: /usr/local/bin/starship}
 
-  # atuin — magical shell history (sqlite-backed, sync-capable)
-  - repo: atuinsh/atuin
+  - repo: atuinsh/atuin                   # magical shell history
     asset_regex: 'atuin-x86_64-unknown-linux-gnu\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: atuin, dest: /usr/local/bin/atuin}
 
-  # --- recon / web testing (ProjectDiscovery suite + friends) ---
-
-  - repo: projectdiscovery/nuclei
+  # ── Recon / web testing (ProjectDiscovery suite + friends) ────────
+  - repo: projectdiscovery/nuclei         # nuclei -u https://t -t cves/
     asset_regex: 'nuclei_.*_linux_amd64\.zip$'
     bin:
       - {src: nuclei, dest: /usr/local/bin/nuclei}
 
-  - repo: projectdiscovery/httpx
+  - repo: projectdiscovery/httpx          # cat hosts.txt | pdhttpx
     asset_regex: 'httpx_.*_linux_amd64\.zip$'
     bin:
-      # projectdiscovery's httpx clashes with the python `httpx` pkg — we
-      # rename the binary to `pdhttpx` to keep both usable.
+      # Installed as `pdhttpx` so it doesn't clash with Python's httpx.
       - {src: httpx, dest: /usr/local/bin/pdhttpx}
 
-  - repo: projectdiscovery/subfinder
+  - repo: projectdiscovery/subfinder      # subfinder -d example.com
     asset_regex: 'subfinder_.*_linux_amd64\.zip$'
     bin:
       - {src: subfinder, dest: /usr/local/bin/subfinder}
 
-  - repo: projectdiscovery/naabu
+  - repo: projectdiscovery/naabu          # naabu -host 10.0.0.1
     asset_regex: 'naabu_.*_linux_amd64\.zip$'
     bin:
       - {src: naabu, dest: /usr/local/bin/naabu}
 
-  - repo: projectdiscovery/katana
+  - repo: projectdiscovery/katana         # katana -u https://target
     asset_regex: 'katana_.*_linux_amd64\.zip$'
     bin:
       - {src: katana, dest: /usr/local/bin/katana}
 
-  - repo: OJ/gobuster
+  - repo: OJ/gobuster                     # gobuster dir -u https://t -w words.txt
     asset_regex: 'gobuster_linux_x86_64\.tar\.gz$'
     bin:
       - {src: gobuster, dest: /usr/local/bin/gobuster}
 
-  - repo: jpillora/chisel
+  - repo: jpillora/chisel                 # chisel server -p 8000 --reverse
     asset_regex: 'chisel_.*_linux_amd64\.gz$'
     bin:
       - {src: chisel, dest: /usr/local/bin/chisel}
 
-  # --- secrets scanners ---
-
-  - repo: trufflesecurity/trufflehog
+  # ── Secrets scanners ──────────────────────────────────────────────
+  - repo: trufflesecurity/trufflehog      # trufflehog git file:///path
     asset_regex: 'trufflehog_.*_linux_amd64\.tar\.gz$'
     bin:
       - {src: trufflehog, dest: /usr/local/bin/trufflehog}
 
-  - repo: gitleaks/gitleaks
+  - repo: gitleaks/gitleaks               # gitleaks dir .
     asset_regex: 'gitleaks_.*_linux_x64\.tar\.gz$'
     bin:
       - {src: gitleaks, dest: /usr/local/bin/gitleaks}
 
-  # --- dev utilities ---
-
-  - repo: casey/just
+  # ── Dev utilities ─────────────────────────────────────────────────
+  - repo: casey/just                      # just -l; just build
     asset_regex: 'just-.*-x86_64-unknown-linux-musl\.tar\.gz$'
     bin:
       - {src: just, dest: /usr/local/bin/just}
 
-  - repo: watchexec/watchexec
+  - repo: watchexec/watchexec             # watchexec -e rs 'cargo test'
     asset_regex: 'watchexec-.*-x86_64-unknown-linux-musl\.tar\.xz$'
     strip_components: 1
     bin:
       - {src: watchexec, dest: /usr/local/bin/watchexec}
 
-  - repo: sharkdp/hyperfine
+  - repo: sharkdp/hyperfine               # hyperfine 'cmd1' 'cmd2'
     asset_regex: 'hyperfine-.*-x86_64-unknown-linux-gnu\.tar\.gz$'
     strip_components: 1
     bin:
       - {src: hyperfine, dest: /usr/local/bin/hyperfine}
 
-  # tokei dropped prebuilt GitHub release assets as of v14.x. If you want
-  # code-stats, either `cargo install tokei` (after rustup), or swap in a
-  # binary-shipping alternative like `boyter/scc`.
-
-  - repo: jesseduffield/lazydocker
+  - repo: jesseduffield/lazydocker        # lazydocker
     asset_regex: 'lazydocker_.*_linux_x86_64\.tar\.gz$'
     bin:
       - {src: lazydocker, dest: /usr/local/bin/lazydocker}
 
-  # cutter — RE GUI for rizin. Ships as an AppImage on GitHub releases.
-  # (libfuse2t64 was added to apt above so the AppImage runs.)
-  - repo: rizinorg/cutter
+  # cutter — RE GUI for rizin. Ships as an AppImage; libfuse2t64 (apt)
+  # provides FUSE2 so the AppImage can mount itself.
+  - repo: rizinorg/cutter                 # cutter <binary>
     asset_regex: 'Cutter-.*-Linux-Qt5-x86_64.AppImage'
     bin:
       - {src: 'Cutter-*.AppImage', dest: /usr/local/bin/cutter}
 
 tarballs:
-  - name: zig
+  # Generic URL tarballs. `resolve: zig-index` reads ziglang.org's JSON
+  # index; `resolve: github-release` uses the GitHub API like
+  # github_releases does. `symlinks:` wire a stable path into /usr/local/bin.
+  - name: zig                             # zig version
     resolve: zig-index
     url: https://ziglang.org/download/index.json
     install_dir: /opt/zig
     symlinks:
       - {src: /opt/zig/current/zig, dest: /usr/local/bin/zig}
 
-  - name: ghidra
+  - name: ghidra                          # ghidraRun
     resolve: github-release
     url: NationalSecurityAgency/ghidra
     asset_regex: 'ghidra_.*_PUBLIC_.*\.zip$'
@@ -430,31 +461,29 @@ tarballs:
       - {src: /opt/ghidra/current/ghidraRun, dest: /usr/local/bin/ghidraRun}
 
 rustup:
+  # Rust toolchains (rustc/cargo). Components and targets are added to
+  # the default toolchain. Installer drops a portable cache/rustup/ tree
+  # that installs cleanly on a fresh offline host.
   toolchains: [stable, nightly]
   default: stable
   components:
     - rust-src
-    - rust-analyzer
-    - clippy
-    - rustfmt
-    - llvm-tools-preview
+    - rust-analyzer             # rust-analyzer  (LSP; LazyVim uses it)
+    - clippy                    # cargo clippy
+    - rustfmt                   # cargo fmt
+    - llvm-tools-preview        # cargo-llvm-cov etc.
   targets:
-    - x86_64-unknown-linux-musl
-    - wasm32-unknown-unknown
+    - x86_64-unknown-linux-musl # static linux builds
+    - wasm32-unknown-unknown    # wasm builds
 
 git_sources:
-  # Each entry clones a repo to `dest`. The `depth` field controls history:
-  #   depth: 1    (default) shallow single-branch clone — fastest, smallest
-  #   depth: N    shallow clone with N commits of history on the target branch
-  #   depth: -1   FULL clone: every branch, every commit. Use when you want
-  #               to `git checkout <any-branch>` offline or really develop.
-  #
-  # Branch defaults to `main`. `post_install` runs shell commands in the
-  # destination dir after clone. `skip_if_command` skips post_install when
-  # the named executable is already on PATH (idempotency for builds).
+  # Mirrored git clones. `depth: 1` (default) = shallow single-branch;
+  # `depth: -1` = full clone with all branches + history.
+  # `post_install:` runs shell commands in the dest dir after clone.
+  # `skip_if_command:` short-circuits post_install when that cmd exists.
 
-  # GEF — GDB Enhanced Features. Sourced from ~/.gdbinit.
-  - url: https://github.com/hugsy/gef
+  # ── GDB enhancements ──────────────────────────────────────────────
+  - url: https://github.com/hugsy/gef     # GDB Enhanced Features
     dest: ~/src/gef
     branch: main
     post_install:
@@ -463,24 +492,24 @@ git_sources:
         grep -qxF 'source ~/.gdbinit-gef.py' "$HOME/.gdbinit" 2>/dev/null \
           || echo 'source ~/.gdbinit-gef.py' >> "$HOME/.gdbinit"
 
-  # GEF-Extras — additional commands/structures for GEF.
-  - url: https://github.com/hugsy/gef-extras
+  - url: https://github.com/hugsy/gef-extras    # extra GEF commands/structs
     dest: ~/src/gef-extras
     branch: main
     post_install:
       - |
-        # Wire GEF-Extras into gef via its settings file. Idempotent: only
-        # appends if the setting isn't already there.
         CFG="$HOME/.gef.rc"
         SCRIPTS_DIR="$PWD/scripts"
-        STRUCTS_DIR="$PWD/structs"
         touch "$CFG"
         grep -q "extra_plugins_dir" "$CFG" \
           || printf '[gef]\nextra_plugins_dir = %s\n' "$SCRIPTS_DIR" >> "$CFG"
-        grep -q "glibc_tcache_count" "$CFG" || true
 
-  # Keystone — assembler. Not packaged in Debian; build from source to get kstool.
-  - url: https://github.com/keystone-engine/keystone
+  - url: https://github.com/pwndbg/pwndbg       # alternative GDB frontend
+    dest: ~/src/pwndbg
+    branch: dev
+    # No post_install — run ./setup.sh manually when you want it enabled.
+
+  # ── Tools built from source (not in Debian) ───────────────────────
+  - url: https://github.com/keystone-engine/keystone    # kstool (assembler)
     dest: ~/src/keystone
     branch: master
     skip_if_command: kstool
@@ -493,9 +522,7 @@ git_sources:
       - sudo cmake --install build
       - sudo ldconfig
 
-  # Rizin — actively maintained radare2 fork. Not in Trixie; build from source.
-  # Default branch is `dev`. Build system is meson + ninja.
-  - url: https://github.com/rizinorg/rizin
+  - url: https://github.com/rizinorg/rizin       # rizin (maintained radare2 fork)
     dest: ~/src/rizin
     branch: dev
     skip_if_command: rizin
@@ -505,9 +532,7 @@ git_sources:
       - sudo ninja -C build install
       - sudo ldconfig
 
-  # honggfuzz — coverage-guided fuzzer. Not in Trixie; build with make.
-  # Needs libbfd-dev + libunwind-dev, which are added to apt packages above.
-  - url: https://github.com/google/honggfuzz
+  - url: https://github.com/google/honggfuzz     # coverage-guided fuzzer
     dest: ~/src/honggfuzz
     branch: master
     skip_if_command: honggfuzz
@@ -515,20 +540,73 @@ git_sources:
       - make
       - sudo make install
 
-  # pwndbg — alternative GDB frontend (complements GEF)
-  - url: https://github.com/pwndbg/pwndbg
-    dest: ~/src/pwndbg
-    branch: dev
-    # (no post_install — user can run ./setup.sh manually when they want it)
+  - url: https://github.com/sullo/nikto          # nikto -h https://target
+    dest: ~/src/nikto
+    branch: master
+    skip_if_command: nikto
+    post_install:
+      - sudo ln -sf "$PWD/program/nikto.pl" /usr/local/bin/nikto
 
-  # --- wordlists / payload collections / cheat sheets ---
-  # These are large (SecLists alone is ~1GB after clone). Each is a single
-  # branch so total disk is bounded. Set all_branches: true if you want the
-  # full history of one of them locally.
+  - url: https://github.com/lgandx/Responder     # sudo responder -I eth0
+    dest: ~/src/Responder
+    branch: master
+    skip_if_command: responder
+    post_install:
+      # Tiny wrapper so `responder` is on $PATH; Responder needs to run
+      # from its own dir for relative paths to resolve.
+      - |
+        sudo tee /usr/local/bin/responder >/dev/null <<EOF
+        #!/usr/bin/env bash
+        cd $PWD && exec python3 Responder.py "\$@"
+        EOF
+      - sudo chmod 0755 /usr/local/bin/responder
 
+  # ── Firmware analysis ─────────────────────────────────────────────
+  - url: https://github.com/ReFirmLabs/binwalk   # binwalk <firmware>
+    dest: ~/src/binwalk
+    branch: master
+    skip_if_command: binwalk
+    post_install:
+      # Build the docker image locally; post/40-binwalk-wrapper.sh wraps
+      # it under /usr/local/bin/binwalk.
+      - |
+        if docker info >/dev/null 2>&1; then
+          docker build -t devvmsetup/binwalk:local .
+        else
+          sudo docker build -t devvmsetup/binwalk:local .
+        fi
+
+  # ── Themes / dotfiles ─────────────────────────────────────────────
+  - url: https://github.com/dracula/terminator   # Dracula Terminator theme
+    dest: ~/src/dracula-terminator
+    branch: master
+    # Applied by post/06-dracula-terminator.sh.
+
+  - url: https://github.com/ohmyzsh/ohmyzsh      # Oh My Zsh
+    dest: ~/src/ohmyzsh
+    branch: master
+    # Wired into /usr/local/share/oh-my-zsh by post/15-oh-my-zsh.sh.
+    # This clone's main purpose is to populate cache/git_sources/ohmyzsh.git
+    # so the post script can copy from the mirror offline.
+
+  # ── RE / exploit source references (read-only clones) ────────────
+  - url: https://github.com/JonathanSalwan/ROPgadget
+    dest: ~/src/ROPgadget
+    branch: master
+    # Also installed via pipx; this clone is for hacking on the source.
+
+  - url: https://github.com/angr/angr
+    dest: ~/src/angr
+    branch: master
+    # angr is heavy — `pip install angr` in a venv for runtime. This
+    # clone is for reading the source.
+
+  # ── Wordlists / payload collections / cheat sheets ────────────────
+  # SecLists alone is ~1 GB after clone. Shallow single-branch by
+  # default. Set `depth: -1` on an entry to keep full history.
   - url: https://github.com/danielmiessler/SecLists
     dest: ~/sec/SecLists
-    branch: master           # default branch of this repo is 'master'
+    branch: master
 
   - url: https://github.com/swisskyrepo/PayloadsAllTheThings
     dest: ~/sec/PayloadsAllTheThings
@@ -550,191 +628,152 @@ git_sources:
     dest: ~/sec/hacktricks
     branch: master
 
-  # --- misc RE / exploit references ---
-
-  - url: https://github.com/JonathanSalwan/ROPgadget
-    dest: ~/src/ROPgadget
-    branch: master
-    # (ROPgadget is also in pipx; git repo is handy for hacking on it)
-
-  - url: https://github.com/angr/angr
-    dest: ~/src/angr
-    branch: master
-    # (angr is heavy; install via `pip install angr` in a venv — the clone
-    # here is for reading the source / developing against it)
-
-  # binwalk — firmware analysis. ReFirmLabs stopped publishing the
-  # `refirmlabs/binwalk` image; the sanctioned path is to clone the repo
-  # and build the image locally. post/40-binwalk-wrapper.sh points at the
-  # tag we build here.
-  - url: https://github.com/ReFirmLabs/binwalk
-    dest: ~/src/binwalk
-    branch: master
-    skip_if_command: binwalk
-    post_install:
-      # Build as the invoking user (they'll be in the docker group by the
-      # time post/ hooks run; inside installer phase we fall back to sudo
-      # if the socket isn't writable yet).
-      - |
-        if docker info >/dev/null 2>&1; then
-          docker build -t devvmsetup/binwalk:local .
-        else
-          sudo docker build -t devvmsetup/binwalk:local .
-        fi
-
-  # Dracula color scheme for Terminator. post/06-dracula-terminator.sh
-  # merges the snippet from this repo into ~/.config/terminator/config.
-  - url: https://github.com/dracula/terminator
-    dest: ~/src/dracula-terminator
-    branch: master
-
-  # Oh My Zsh — cloned here only so the prepare step mirrors it into
-  # cache/git_sources/ohmyzsh.git. post/15-oh-my-zsh.sh then clones from
-  # that mirror to /usr/local/share/oh-my-zsh (sudo, outside git_sources'
-  # user-owned dest model), keeping the install fully offline-capable.
-  - url: https://github.com/ohmyzsh/ohmyzsh
-    dest: ~/src/ohmyzsh
-    branch: master
-
-  # Example of a full-history clone (all branches, full commit history).
-  # Uncomment and point at a repo where you actually want the full history:
-  # - url: https://github.com/torvalds/linux
-  #   dest: ~/src/linux
-  #   branch: master
-  #   depth: -1
-
 docker:
+  # Container images. `save_to_cache: true` runs `docker save` after each
+  # pull so install-mode can `docker load` offline.
   save_to_cache: true
   images:
-    - debian:trixie
+
+    # ── Base OS images ──────────────────────────────────────────────
+    - debian:trixie                       # docker run --rm -it debian:trixie
     - debian:trixie-slim
     - ubuntu:latest
     - alpine:latest
+    - kalilinux/kali-rolling:latest       # docker run --rm -it kalilinux/kali-rolling
+    - remnux/remnux-distro:focal          # malware RE toolkit
+
+    # ── Language runtimes ───────────────────────────────────────────
     - python:3
     - python:3-slim
     - node:lts
     - golang:latest
     - rust:latest
-    - eclipse-temurin:21
-    - redis:latest
-    - postgres:latest
-    - nginx:latest
-    - kalilinux/kali-rolling:latest
-    - remnux/remnux-distro:focal
-    # NOTE: binwalk is no longer pulled from a registry — ReFirmLabs stopped
-    # publishing refirmlabs/binwalk. Instead, we clone the repo via
-    # git_sources and build the image locally as `devvmsetup/binwalk:local`
-    # in a post_install step. post/40-binwalk-wrapper.sh invokes that tag.
+    - eclipse-temurin:21                  # OpenJDK 21
 
-    # --- offensive tooling in containers ---
-    - metasploitframework/metasploit-framework:latest
-    - mitmproxy/mitmproxy:latest
-    - zaproxy/zap-stable:latest        # the owasp/zap2docker-* names are deprecated
+    # ── Services ────────────────────────────────────────────────────
+    - redis:latest                        # docker run -d -p 6379:6379 redis
+    - postgres:latest                     # docker run -d -e POSTGRES_PASSWORD=x postgres
+    - nginx:latest                        # docker run -d -p 8080:80 nginx
 
-    # --- intentionally vulnerable targets (for practice / research only) ---
-    - bkimminich/juice-shop:latest     # OWASP Juice Shop
-    - vulnerables/web-dvwa:latest      # DVWA
-    - webgoat/webgoat:latest           # OWASP WebGoat
+    # ── Offensive tooling in containers ─────────────────────────────
+    - metasploitframework/metasploit-framework:latest  # docker run --rm -it … msfconsole
+    - mitmproxy/mitmproxy:latest          # mitmproxy is also in pipx; image for CI
+    - zaproxy/zap-stable:latest           # docker run -u zap -p 8080:8080 zaproxy/zap-stable zap.sh
+
+    # ── Intentionally vulnerable targets (practice / research) ──────
+    - bkimminich/juice-shop:latest        # OWASP Juice Shop
+    - vulnerables/web-dvwa:latest         # DVWA
+    - webgoat/webgoat:latest              # OWASP WebGoat
 
 docs:
+  # man-db/info index refresh + zeal docsets (download from Kapeli's CDN
+  # into cache/docsets/ during prepare). An invalid name logs a warning
+  # and skips without failing the run.
   rebuild_mandb: true
   rebuild_info: true
-  # Zeal docsets from Kapeli's CDN (go.kapeli.com/d/NAME). If a name 404s
-  # the installer logs a warning and skips — so speculative entries are
-  # harmless. Each docset is ~10-200 MB; this list is ~2-3 GB total.
   zeal_docsets:
-    # Names below must match a feed file in https://github.com/Kapeli/feeds
-    # (the stem of `<name>.xml` is the docset name here). Python_3,
-    # Regular_Expressions, and GCC all 404 from the kapeli mirrors despite
-    # being tempting to list — drop them rather than chase broken feeds.
-    # Languages you work in
+    # Docset names match feed files at https://github.com/Kapeli/feeds
+    # (the stem of `<name>.xml` on the mirror).
+
+    # ── Languages you work in ───────────────────────────────────────
     - C
     - C++
     - Rust
     - Bash
-    # Languages you'll read 3rd-party source in
+
+    # ── Languages you read 3rd-party code in ────────────────────────
     - Go
     - Java
     - JavaScript
     - TypeScript
-    # System / Unix reference (valuable for RE)
+
+    # ── System / Unix reference ─────────────────────────────────────
     - Man_Pages
-    # Build / infra tooling
+
+    # ── Build / infra tooling ───────────────────────────────────────
     - CMake
     - Docker
     - Git
     - Vim
-    # Quick-lookup references
+
+    # ── Quick-lookup references ─────────────────────────────────────
     - HTTP
     - Markdown
-    # Databases
+
+    # ── Databases ───────────────────────────────────────────────────
     - PostgreSQL
     - SQLite
     - Redis
 
 fonts:
-  # Installed system-wide (visible to every user). The JetBrainsMono Nerd
-  # Font is what Terminator, LazyVim icons, and agnoster all rely on. The
-  # prepare step caches the zip to cache/fonts/<name>/ so install runs
-  # fully offline.
+  # System-wide font archives. Prepare caches the zip under
+  # cache/fonts/<name>/; install extracts matching files under
+  # install_dir and runs fc-cache.
   - name: JetBrainsMono-Nerd
     url: https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
     install_dir: /usr/share/fonts/truetype/jetbrains-mono-nerd
     extract_pattern: "*.ttf"
 
 vscode_extensions:
-  # Installed via `code --install-extension` after `code` is on PATH.
-  # Runs as the invoking user so extensions land in ~/.vscode/extensions.
-  # Idempotent: re-running is a no-op for already-installed extensions.
+  # Installed via `code --install-extension` as the invoking user. The
+  # prepare step queries the Marketplace gallery API for latest
+  # versions and caches the .vsix bundles under cache/vscode/.
   extensions:
+    # ── Python ──────────────────────────────────────────────────────
     - ms-python.python
     - ms-python.vscode-pylance
     - ms-python.debugpy
     - ms-python.black-formatter
     - ms-toolsai.jupyter
+    - njpwerner.autodocstring
+    - donjayamanne.python-extension-pack
+
+    # ── C / C++ / CMake / Make ──────────────────────────────────────
     - ms-vscode.cpptools
     - ms-vscode.cpptools-themes
     - ms-vscode.cpptools-extension-pack
     - ms-vscode.cmake-tools
     - ms-vscode.makefile-tools
-    - ms-vscode.hexeditor
-    - ms-vscode.remote-explorer
-    - ms-vscode.remote-server
+    - xaver.clang-format
+    - twxs.cmake
+    - cschlosser.doxdocgen
+
+    # ── Other languages ─────────────────────────────────────────────
+    - ziglang.vscode-zig
+    - rust-lang.rust-analyzer
+    - redhat.java
+    - ms-dotnettools.csharp
+    - vadimcn.vscode-lldb
+
+    # ── Remote dev ──────────────────────────────────────────────────
     - ms-vscode-remote.remote-wsl
     - ms-vscode-remote.remote-containers
     - ms-vscode-remote.remote-ssh
     - ms-vscode-remote.remote-ssh-edit
     - ms-vscode-remote.vscode-remote-extensionpack
+    - ms-vscode.remote-explorer
+    - ms-vscode.remote-server
     - ms-azuretools.vscode-docker
-    - ms-dotnettools.csharp
-    - xaver.clang-format
-    - twxs.cmake
-    - ziglang.vscode-zig
-    - rust-lang.rust-analyzer
-    - redhat.java
+
+    # ── Formats / misc ──────────────────────────────────────────────
     - redhat.vscode-yaml
     - esbenp.prettier-vscode
-    - njpwerner.autodocstring
-    - donjayamanne.python-extension-pack
     - yzhang.markdown-all-in-one
     - DavidAnson.vscode-markdownlint
-    - cschlosser.doxdocgen
-    - vadimcn.vscode-lldb
+    - ms-vscode.hexeditor
     - dracula-theme.theme-dracula
 
 neovim_offline:
-  # Self-contained LazyVim bundle under ./NeovimOffline/. The `prepare` phase
-  # runs stage.sh (downloads nvim/node/JDK/fonts, clones every plugin, installs
-  # every Mason LSP, compiles treesitter parsers). The `install` phase runs
-  # install.sh which deploys everything into the invoking user's $HOME with no
-  # further network access required.
+  # Air-gap-safe LazyVim bundle. The `prepare` phase runs stage.sh
+  # (downloads nvim/node/jdk, clones plugins, installs Mason servers,
+  # compiles treesitter parsers) into cache/neovim_offline/. The
+  # `install` phase runs install.sh, deploying to the invoking user's
+  # $HOME. See installers/neovim_offline/README.md for details.
   enabled: true
+
   # stage_mode:
-  #   all    — full stage: fetch tarballs AND resolve plugins/mason/treesitter.
-  #            Needs gcc/make/unzip on PATH (covered by apt.packages once
-  #            install has run once). On a fresh host, run --mode full twice,
-  #            or run stage.sh manually once to prime things.
-  #   fetch  — download tarballs only; skip headless nvim run. Useful on
-  #            offline-build pipelines where you stage plugins elsewhere.
-  #   none   — skip staging entirely. install-phase still deploys if already staged.
+  #   all    — fetch tarballs + resolve plugins/mason/treesitter
+  #            (needs gcc/make/unzip on PATH; bootstrap.sh provides them)
+  #   fetch  — download tarballs only; skip headless nvim run
+  #   none   — skip staging; install still deploys from the cache if present
   stage_mode: all

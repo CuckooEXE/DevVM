@@ -1,19 +1,20 @@
-"""NeovimOffline installer: stages the LazyVim bundle during prepare, deploys it during install.
+"""LazyVim offline bundle installer.
 
-Layout (post-cache-integration):
+Layout:
+- installers/neovim_offline/     — source (this package): stage.sh,
+                                   install.sh, config/nvim/
+- <cache_dir>/neovim_offline/    — artifacts: bin/, jdk/,
+                                   share/nvim/{lazy,mason,site}
 
-- <root>/NeovimOffline/                  — source: stage.sh, install.sh, config/nvim/
-- <cache_dir>/neovim_offline/            — artifacts: bin/, jdk/, share/nvim/{lazy,mason,site}
-
-Staging downloads every asset the bundle needs (nvim, node, JDK, tree-sitter
-CLI) into the cache dir, then runs headless nvim to pre-resolve plugins,
-Mason packages, and compiled treesitter parsers there. install.sh deploys
-from that cache into the invoking user's $HOME with no further network
-access required.
+Staging downloads every asset the bundle needs (nvim, node, JDK,
+tree-sitter CLI) into the cache dir, then runs headless nvim to
+pre-resolve plugins, Mason packages, and compiled treesitter parsers
+there. install.sh deploys from that cache into the invoking user's
+$HOME with no further network access required.
 
 Both scripts honour the BUNDLE_DIR env var; this module sets it to
-<cache_dir>/neovim_offline so artifacts live under the shared cache/ tree
-alongside every other offline-capable installer.
+<cache_dir>/neovim_offline so artifacts live under the shared cache/
+tree alongside every other offline-capable installer.
 """
 from __future__ import annotations
 
@@ -22,12 +23,11 @@ import os
 import pwd
 from pathlib import Path
 
-from ._common import is_command
+from .._common import is_command
 
 log = logging.getLogger("installers.neovim_offline")
 
-SOURCE_DIRNAME = "NeovimOffline"
-CACHE_SUBDIR   = "neovim_offline"
+CACHE_SUBDIR = "neovim_offline"
 
 STAGE_TOOLS_BY_MODE = {
     "fetch":   ["curl", "tar"],
@@ -37,9 +37,9 @@ INSTALL_TOOLS = ["tar", "unzip", "curl"]
 
 
 def _source_dir(section: dict, ctx) -> Path:
-    """Where the tracked scripts + config/nvim live."""
+    """Where the tracked scripts + config/nvim live (this package dir)."""
     override = section.get("source_dir") or section.get("bundle_dir")
-    return Path(override) if override else (ctx.root / SOURCE_DIRNAME)
+    return Path(override) if override else Path(__file__).resolve().parent
 
 
 def _bundle_cache(ctx) -> Path:
@@ -62,7 +62,7 @@ def _user_home() -> Path:
 
 
 def _run_script(ctx, script: Path, bundle_cache: Path, *args: str) -> None:
-    """Invoke a NeovimOffline script with BUNDLE_DIR wired to the cache."""
+    """Invoke stage.sh or install.sh with BUNDLE_DIR wired to the cache."""
     ctx.run([
         "env", f"BUNDLE_DIR={bundle_cache}",
         "bash", str(script), *args,

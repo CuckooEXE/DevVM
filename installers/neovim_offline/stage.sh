@@ -16,8 +16,8 @@
 # re-running skips work already completed.
 #
 # Layout:
-#   SOURCE_DIR  = NeovimOffline/          (tracked — scripts + config/nvim)
-#   BUNDLE_DIR  = cache/neovim_offline/   (artifacts — bin/, jdk/, share/)
+#   SOURCE_DIR  = installers/neovim_offline/   (tracked — scripts + config/nvim)
+#   BUNDLE_DIR  = cache/neovim_offline/        (artifacts — bin/, jdk/, share/)
 #
 # Override BUNDLE_DIR with the env var of the same name to stage somewhere
 # other than the repo's cache (e.g. to a portable directory for offline
@@ -29,7 +29,7 @@ SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_DIR="$SOURCE_DIR/config"
 
 # Resolve BUNDLE_DIR. Priority:
-#   1. explicit env var  (set by installers/neovim_offline.py)
+#   1. explicit env var  (set by installers/neovim_offline/__init__.py)
 #   2. $repo_root/cache/neovim_offline if we can find a repo root
 #   3. fall back to SOURCE_DIR for standalone/air-gap bundles
 if [[ -z "${BUNDLE_DIR:-}" ]]; then

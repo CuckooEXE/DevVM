@@ -8,8 +8,8 @@
 #          ./install.sh <cmd> --force # skip confirmation prompts
 #
 # Layout:
-#   SOURCE_DIR  = NeovimOffline/          (tracked — scripts + config/nvim)
-#   BUNDLE_DIR  = cache/neovim_offline/   (artifacts — bin/, jdk/, share/)
+#   SOURCE_DIR  = installers/neovim_offline/   (tracked — scripts + config/nvim)
+#   BUNDLE_DIR  = cache/neovim_offline/        (artifacts — bin/, jdk/, share/)
 #
 # Override BUNDLE_DIR with the env var of the same name to deploy from a
 # portable bundle (e.g. an air-gap tarball co-located with this script).

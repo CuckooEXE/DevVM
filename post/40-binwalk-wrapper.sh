@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Install a /usr/local/bin/binwalk wrapper that runs binwalk via docker.
 #
-# ReFirmLabs stopped publishing the `refirmlabs/binwalk` image, so the
-# docker image is built locally from the git clone staged by
-# `git_sources` (see vmconfig.yaml) as `devvmsetup/binwalk:local`. If
-# that tag is missing, we fall back to building it now.
+# The image `devvmsetup/binwalk:local` is built locally from the
+# ReFirmLabs/binwalk clone staged by git_sources (see vmconfig.yaml). If
+# the tag is missing when this script runs, we build it here.
 #
-# Idempotent: rewrites the shim each run (cheap + keeps it fresh).
+# Idempotent: rewrites the shim each run.
 set -euo pipefail
 
 IMAGE="devvmsetup/binwalk:local"
@@ -18,9 +17,9 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 0
 fi
 
-# Prefer the user's own daemon access (they'll be in the docker group
-# once 30-docker-group has run); fall back to sudo if the socket isn't
-# writable yet in the current session.
+# Talk to the docker daemon with the invoking user's creds when the
+# socket is writable (i.e. user is in the docker group for this session);
+# sudo otherwise.
 docker_cmd() {
     if docker info >/dev/null 2>&1; then
         docker "$@"

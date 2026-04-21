@@ -44,6 +44,3 @@ Desktop.ini
 *.rej
 /tmp-*
 
-# NeovimOffline artifacts now live under cache/neovim_offline/, which is
-# already covered by the `cache/` rule above. The tracked scripts and
-# config/ under NeovimOffline/ stay committed.

@@ -5,7 +5,6 @@
 
 return {
   -- mason.nvim — don't auto-update the registry on startup.
-  -- (The plugin was renamed from williamboman/ to mason-org/ in 2025.)
   {
     "mason-org/mason.nvim",
     opts = {

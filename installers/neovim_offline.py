@@ -1,38 +1,54 @@
 """NeovimOffline installer: stages the LazyVim bundle during prepare, deploys it during install.
 
-The bundle lives at <root>/NeovimOffline/. Staging downloads every asset the
-bundle needs (nvim, node, JDK, Nerd Font, tree-sitter CLI) and runs headless
-nvim to pre-resolve plugins, Mason packages, and compiled treesitter parsers.
-install.sh then deploys everything into the invoking user's $HOME with no
-further network access required.
+Layout (post-cache-integration):
+
+- <root>/NeovimOffline/                  — source: stage.sh, install.sh, config/nvim/
+- <cache_dir>/neovim_offline/            — artifacts: bin/, jdk/, share/nvim/{lazy,mason,site}
+
+Staging downloads every asset the bundle needs (nvim, node, JDK, tree-sitter
+CLI) into the cache dir, then runs headless nvim to pre-resolve plugins,
+Mason packages, and compiled treesitter parsers there. install.sh deploys
+from that cache into the invoking user's $HOME with no further network
+access required.
+
+Both scripts honour the BUNDLE_DIR env var; this module sets it to
+<cache_dir>/neovim_offline so artifacts live under the shared cache/ tree
+alongside every other offline-capable installer.
 """
 from __future__ import annotations
 
 import logging
 import os
 import pwd
-import shutil
 from pathlib import Path
 
 from ._common import is_command
 
 log = logging.getLogger("installers.neovim_offline")
 
-BUNDLE_DIRNAME = "NeovimOffline"
+SOURCE_DIRNAME = "NeovimOffline"
+CACHE_SUBDIR   = "neovim_offline"
+
 STAGE_TOOLS_BY_MODE = {
     "fetch":   ["curl", "tar"],
     "all":     ["curl", "tar", "unzip", "gcc", "make"],
 }
-INSTALL_TOOLS = ["tar", "unzip", "curl", "fc-cache"]
+INSTALL_TOOLS = ["tar", "unzip", "curl"]
 
 
-def _bundle_dir(section: dict, ctx) -> Path:
-    bundle = section.get("bundle_dir")
-    return Path(bundle) if bundle else (ctx.root / BUNDLE_DIRNAME)
+def _source_dir(section: dict, ctx) -> Path:
+    """Where the tracked scripts + config/nvim live."""
+    override = section.get("source_dir") or section.get("bundle_dir")
+    return Path(override) if override else (ctx.root / SOURCE_DIRNAME)
 
 
-def _is_staged(bundle: Path) -> bool:
-    lazy = bundle / "share" / "nvim" / "lazy"
+def _bundle_cache(ctx) -> Path:
+    """Where downloaded tarballs + staged plugin/mason/ts trees live."""
+    return ctx.cache_dir / CACHE_SUBDIR
+
+
+def _is_staged(bundle_cache: Path) -> bool:
+    lazy = bundle_cache / "share" / "nvim" / "lazy"
     if not lazy.is_dir():
         return False
     try:
@@ -45,23 +61,12 @@ def _user_home() -> Path:
     return Path(pwd.getpwuid(os.geteuid()).pw_dir)
 
 
-def _link_cache(bundle: Path, ctx) -> None:
-    """Expose bundle-relative downloads under cache/neovim_offline/ as symlinks."""
-    if ctx.dry_run:
-        return
-    cache_link = ctx.cache_dir / "neovim_offline"
-    cache_link.mkdir(parents=True, exist_ok=True)
-    for sub in ("bin", "jdk", "fonts", "share", ".downloads"):
-        src = bundle / sub
-        if not src.exists():
-            continue
-        link = cache_link / sub.lstrip(".")
-        if link.is_symlink() or link.exists():
-            continue
-        try:
-            link.symlink_to(src)
-        except OSError as e:
-            log.debug("could not symlink %s -> %s: %s", link, src, e)
+def _run_script(ctx, script: Path, bundle_cache: Path, *args: str) -> None:
+    """Invoke a NeovimOffline script with BUNDLE_DIR wired to the cache."""
+    ctx.run([
+        "env", f"BUNDLE_DIR={bundle_cache}",
+        "bash", str(script), *args,
+    ])
 
 
 def prepare(section: dict, ctx) -> None:
@@ -69,12 +74,12 @@ def prepare(section: dict, ctx) -> None:
         log.info("neovim_offline: disabled in config; skipping stage")
         return
 
-    bundle = _bundle_dir(section, ctx)
-    if not bundle.is_dir():
-        log.warning("neovim_offline: bundle dir %s not found; skipping", bundle)
+    source = _source_dir(section, ctx)
+    if not source.is_dir():
+        log.warning("neovim_offline: source dir %s not found; skipping", source)
         return
 
-    stage_script = bundle / "stage.sh"
+    stage_script = source / "stage.sh"
     if not stage_script.is_file():
         log.warning("neovim_offline: %s missing; skipping", stage_script)
         return
@@ -95,10 +100,10 @@ def prepare(section: dict, ctx) -> None:
             ", ".join(missing), stage_mode,
         )
 
-    log.info("neovim_offline: running %s %s", stage_script.name, stage_mode)
-    ctx.run(["bash", str(stage_script), stage_mode])
-
-    _link_cache(bundle, ctx)
+    bundle_cache = _bundle_cache(ctx)
+    bundle_cache.mkdir(parents=True, exist_ok=True)
+    log.info("neovim_offline: staging into %s", bundle_cache)
+    _run_script(ctx, stage_script, bundle_cache, stage_mode)
 
 
 def install(section: dict, ctx) -> None:
@@ -106,17 +111,19 @@ def install(section: dict, ctx) -> None:
         log.info("neovim_offline: disabled in config; skipping install")
         return
 
-    bundle = _bundle_dir(section, ctx)
-    install_script = bundle / "install.sh"
+    source = _source_dir(section, ctx)
+    install_script = source / "install.sh"
     if not install_script.is_file():
         log.warning("neovim_offline: %s missing; skipping", install_script)
         return
 
-    if not _is_staged(bundle):
+    bundle_cache = _bundle_cache(ctx)
+    if not _is_staged(bundle_cache):
         log.warning(
             "neovim_offline install: bundle not staged "
             "(empty %s/share/nvim/lazy). Run with --mode prepare on a "
-            "connected machine first.", bundle,
+            "connected machine first, or ship cache/neovim_offline/ "
+            "alongside this repo.", bundle_cache,
         )
         return
 
@@ -124,7 +131,7 @@ def install(section: dict, ctx) -> None:
     if missing:
         log.warning(
             "neovim_offline install: missing %s on PATH. Install the "
-            "tar/unzip/curl/fontconfig apt packages before re-running.",
+            "tar/unzip/curl apt packages before re-running.",
             ", ".join(missing),
         )
         return
@@ -140,5 +147,5 @@ def install(section: dict, ctx) -> None:
         )
         return
 
-    log.info("neovim_offline: deploying bundle -> %s", home)
-    ctx.run(["bash", str(install_script), "--force"])
+    log.info("neovim_offline: deploying %s -> %s", bundle_cache, home)
+    _run_script(ctx, install_script, bundle_cache, "--force")

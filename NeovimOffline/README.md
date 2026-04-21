@@ -11,16 +11,38 @@ JavaScript/TypeScript/HTML/CSS, Docker.
 
 ## What's in the box
 
+The tracked source tree is tiny:
+
 ```
 NeovimOffline/
-├── bin/              nvim + node tarballs
-├── jdk/              OpenJDK 21 (for jdtls Java LSP)
 ├── config/nvim/      the LazyVim config that gets copied to ~/.config/nvim
-├── share/nvim/
-│   ├── lazy/         every plugin, pre-cloned
-│   └── mason/        every LSP, DAP, formatter, pre-installed
 ├── stage.sh          builder — run on the ONLINE machine
 └── install.sh        deployer — run on the OFFLINE machine
+```
+
+Everything the staging step downloads and produces lands under the shared
+`cache/neovim_offline/` dir instead of cluttering this source tree:
+
+```
+<repo>/cache/neovim_offline/
+├── bin/              nvim + node tarballs
+├── jdk/              OpenJDK 21 (for jdtls Java LSP)
+├── share/nvim/
+│   ├── lazy/         every plugin, pre-cloned
+│   ├── mason/        every LSP, DAP, formatter, pre-installed
+│   └── site/         treesitter parsers
+├── .stage/           scratch XDG_{CONFIG,DATA}_HOME for staging
+└── .downloads/       raw downloads (tree-sitter CLI, etc.)
+```
+
+Both `stage.sh` and `install.sh` honour the `BUNDLE_DIR` env var (defaults
+to the cache path above; falls back to the script directory when run
+outside a DevVMSetup repo). Set it explicitly to ship a portable self-
+contained bundle:
+
+```
+BUNDLE_DIR=/tmp/nvim-bundle ./stage.sh      # stage into a throwaway dir
+BUNDLE_DIR=/media/usb/nvim ./install.sh     # deploy from external media
 ```
 
 ## Workflow
@@ -159,11 +181,15 @@ the user's prior Zig install layout) and falls back to `zls` on PATH. Install
 
 ## Layout summary
 
-| Target path                          | Source in bundle        |
-|--------------------------------------|-------------------------|
-| `~/.local/share/nvim-runtime/`       | `bin/nvim-linux-*.tar.gz` |
-| `~/.local/share/node/`               | `bin/node-*.tar.xz`     |
-| `~/.local/share/jdk-21/`             | `jdk/OpenJDK21*.tar.gz` |
-| `~/.config/nvim/`                    | `config/nvim/`          |
-| `~/.local/share/nvim/lazy/`          | `share/nvim/lazy/`      |
-| `~/.local/share/nvim/mason/`         | `share/nvim/mason/`     |
+All bundle-relative paths below are under `$BUNDLE_DIR` (i.e.
+`cache/neovim_offline/` by default) except `config/nvim/`, which is
+tracked under `NeovimOffline/`:
+
+| Target path                          | Source                         |
+|--------------------------------------|--------------------------------|
+| `~/.local/share/nvim-runtime/`       | `bin/nvim-linux-*.tar.gz`      |
+| `~/.local/share/node/`               | `bin/node-*.tar.xz`            |
+| `~/.local/share/jdk-21/`             | `jdk/OpenJDK21*.tar.gz`        |
+| `~/.config/nvim/`                    | `NeovimOffline/config/nvim/`   |
+| `~/.local/share/nvim/lazy/`          | `share/nvim/lazy/`             |
+| `~/.local/share/nvim/mason/`         | `share/nvim/mason/`            |

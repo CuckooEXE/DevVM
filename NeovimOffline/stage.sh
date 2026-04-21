@@ -14,16 +14,43 @@
 #
 # Running with no argument does all steps in order. Each step is idempotent;
 # re-running skips work already completed.
+#
+# Layout:
+#   SOURCE_DIR  = NeovimOffline/          (tracked — scripts + config/nvim)
+#   BUNDLE_DIR  = cache/neovim_offline/   (artifacts — bin/, jdk/, share/)
+#
+# Override BUNDLE_DIR with the env var of the same name to stage somewhere
+# other than the repo's cache (e.g. to a portable directory for offline
+# transport).
 
 set -euo pipefail
 
-BUNDLE="$(cd "$(dirname "$0")" && pwd)"
-STAGE="$BUNDLE/.stage"           # scratch dir for XDG_{CONFIG,DATA}_HOME
+SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_DIR="$SOURCE_DIR/config"
+
+# Resolve BUNDLE_DIR. Priority:
+#   1. explicit env var  (set by installers/neovim_offline.py)
+#   2. $repo_root/cache/neovim_offline if we can find a repo root
+#   3. fall back to SOURCE_DIR for standalone/air-gap bundles
+if [[ -z "${BUNDLE_DIR:-}" ]]; then
+  candidate="$SOURCE_DIR"
+  while [[ "$candidate" != "/" ]]; do
+    if [[ -f "$candidate/setup.py" && -f "$candidate/vmconfig.yaml" ]]; then
+      BUNDLE_DIR="$candidate/cache/neovim_offline"
+      break
+    fi
+    candidate="$(cd "$candidate/.." && pwd)"
+  done
+  BUNDLE_DIR="${BUNDLE_DIR:-$SOURCE_DIR}"
+fi
+mkdir -p "$BUNDLE_DIR"
+
+STAGE="$BUNDLE_DIR/.stage"        # scratch dir for XDG_{CONFIG,DATA}_HOME
 STAGE_CFG="$STAGE/config"
 STAGE_DATA="$STAGE/data"
 STAGE_STATE="$STAGE/state"
 STAGE_CACHE="$STAGE/cache"
-DL="$BUNDLE/.downloads"           # cache downloads so re-runs don't re-fetch
+DL="$BUNDLE_DIR/.downloads"        # cache downloads so re-runs don't re-fetch
 
 # Pinned versions — edit these to update the bundle.
 NVIM_VERSION="v0.12.1"
@@ -37,29 +64,30 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$DL" "$STAGE_CFG" "$STAGE_DATA" "$STAGE_STATE" "$STAGE_CACHE"
-mkdir -p "$BUNDLE/bin" "$BUNDLE/jdk" "$BUNDLE/share/nvim"
+mkdir -p "$BUNDLE_DIR/bin" "$BUNDLE_DIR/jdk" "$BUNDLE_DIR/share/nvim"
+log "bundle dir: $BUNDLE_DIR"
 
 # ----------------------------------------------------------------------
-# Step: fetch — download all tarballs into $BUNDLE/bin, $BUNDLE/jdk, $BUNDLE/fonts
+# Step: fetch — download all tarballs into $BUNDLE_DIR/bin, $BUNDLE_DIR/jdk, $BUNDLE_DIR/fonts
 # ----------------------------------------------------------------------
 do_fetch() {
   log "Fetching Neovim $NVIM_VERSION …"
   local nvim_tar="nvim-linux-x86_64.tar.gz"
-  if [[ ! -s "$BUNDLE/bin/$nvim_tar" ]]; then
-    curl -fL --retry 3 -o "$BUNDLE/bin/$nvim_tar" \
+  if [[ ! -s "$BUNDLE_DIR/bin/$nvim_tar" ]]; then
+    curl -fL --retry 3 -o "$BUNDLE_DIR/bin/$nvim_tar" \
       "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/${nvim_tar}"
   fi
 
   log "Fetching Node.js $NODE_VERSION …"
   local node_tar="node-${NODE_VERSION}-linux-x64.tar.xz"
-  if [[ ! -s "$BUNDLE/bin/$node_tar" ]]; then
-    curl -fL --retry 3 -o "$BUNDLE/bin/$node_tar" \
+  if [[ ! -s "$BUNDLE_DIR/bin/$node_tar" ]]; then
+    curl -fL --retry 3 -o "$BUNDLE_DIR/bin/$node_tar" \
       "https://nodejs.org/dist/${NODE_VERSION}/${node_tar}"
   fi
 
   log "Fetching Temurin JDK 21 …"
-  if [[ ! -s "$BUNDLE/jdk/$JDK_FILE" ]]; then
-    curl -fL --retry 3 -o "$BUNDLE/jdk/$JDK_FILE" \
+  if [[ ! -s "$BUNDLE_DIR/jdk/$JDK_FILE" ]]; then
+    curl -fL --retry 3 -o "$BUNDLE_DIR/jdk/$JDK_FILE" \
       "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-${JDK_VERSION}/${JDK_FILE}"
   fi
 
@@ -84,19 +112,19 @@ extract_toolchain() {
   if [[ ! -x "$nvim_root/bin/nvim" ]]; then
     log "Extracting nvim to $nvim_root"
     mkdir -p "$nvim_root"
-    tar --strip-components=1 -xzf "$BUNDLE/bin/nvim-linux-x86_64.tar.gz" -C "$nvim_root"
+    tar --strip-components=1 -xzf "$BUNDLE_DIR/bin/nvim-linux-x86_64.tar.gz" -C "$nvim_root"
   fi
 
   if [[ ! -x "$node_root/bin/node" ]]; then
     log "Extracting node to $node_root"
     mkdir -p "$node_root"
-    tar --strip-components=1 -xJf "$BUNDLE/bin/$node_tar" -C "$node_root"
+    tar --strip-components=1 -xJf "$BUNDLE_DIR/bin/$node_tar" -C "$node_root"
   fi
 
   if [[ ! -x "$jdk_root/bin/java" ]]; then
     log "Extracting jdk to $jdk_root"
     mkdir -p "$jdk_root"
-    tar --strip-components=1 -xzf "$BUNDLE/jdk/$JDK_FILE" -C "$jdk_root"
+    tar --strip-components=1 -xzf "$BUNDLE_DIR/jdk/$JDK_FILE" -C "$jdk_root"
   fi
 
   local ts_cli_root="$STAGE/ts-cli"
@@ -117,7 +145,7 @@ extract_toolchain() {
   # Symlink our config into the staging XDG_CONFIG_HOME.
   mkdir -p "$STAGE_CFG"
   rm -rf "$STAGE_CFG/nvim"
-  ln -sfn "$BUNDLE/config/nvim" "$STAGE_CFG/nvim"
+  ln -sfn "$CONFIG_DIR/nvim" "$STAGE_CFG/nvim"
 
   log "nvim $(nvim --version | head -1)"
   log "node $(node --version)  npm $(npm --version)"
@@ -378,17 +406,17 @@ LUA
 # ----------------------------------------------------------------------
 do_copy() {
   log "Copying staged data into bundle …"
-  rm -rf "$BUNDLE/share/nvim/lazy" "$BUNDLE/share/nvim/mason" "$BUNDLE/share/nvim/site"
-  cp -a "$STAGE_DATA/nvim/lazy"  "$BUNDLE/share/nvim/lazy"
-  cp -a "$STAGE_DATA/nvim/mason" "$BUNDLE/share/nvim/mason"
+  rm -rf "$BUNDLE_DIR/share/nvim/lazy" "$BUNDLE_DIR/share/nvim/mason" "$BUNDLE_DIR/share/nvim/site"
+  cp -a "$STAGE_DATA/nvim/lazy"  "$BUNDLE_DIR/share/nvim/lazy"
+  cp -a "$STAGE_DATA/nvim/mason" "$BUNDLE_DIR/share/nvim/mason"
   # nvim-treesitter (main branch) installs compiled parsers + queries into
   # stdpath('data')/site/{parser,parser-info,queries}, not under lazy/.
   if [[ -d "$STAGE_DATA/nvim/site" ]]; then
-    cp -a "$STAGE_DATA/nvim/site" "$BUNDLE/share/nvim/site"
+    cp -a "$STAGE_DATA/nvim/site" "$BUNDLE_DIR/share/nvim/site"
   else
     warn "No site/ dir at $STAGE_DATA/nvim/site — treesitter parsers may be missing."
   fi
-  log "Bundle size: $(du -sh "$BUNDLE" | cut -f1)"
+  log "Bundle size: $(du -sh "$BUNDLE_DIR" | cut -f1)"
   log "Done. Run ./install.sh on the offline machine."
 }
 
@@ -397,11 +425,11 @@ do_copy() {
 # ----------------------------------------------------------------------
 do_clean() {
   local targets=(
-    "$BUNDLE/.stage"
-    "$BUNDLE/.downloads"
-    "$BUNDLE/share/nvim/lazy"
-    "$BUNDLE/share/nvim/mason"
-    "$BUNDLE/share/nvim/site"
+    "$BUNDLE_DIR/.stage"
+    "$BUNDLE_DIR/.downloads"
+    "$BUNDLE_DIR/share/nvim/lazy"
+    "$BUNDLE_DIR/share/nvim/mason"
+    "$BUNDLE_DIR/share/nvim/site"
   )
 
   local found=()

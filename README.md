@@ -65,26 +65,36 @@ is passed.
 
 ## NeovimOffline bundle
 
-`NeovimOffline/` is a self-contained, air-gap-safe LazyVim bundle (Neovim +
-every plugin + every LSP/DAP/formatter + OpenJDK 21 for `jdtls`). The
-JetBrainsMono Nerd Font it relies on for icon glyphs is installed separately,
-system-wide, by `post/05-fonts.sh`. It has its own two-phase workflow that
-mirrors this project's
-`prepare`/`install` split:
+LazyVim + every plugin + every LSP/DAP/formatter + OpenJDK 21 for `jdtls`,
+packaged for air-gapped install. Fully integrated with the cache pipeline:
 
-1. On a **connected** machine: `cd NeovimOffline && ./stage.sh` (10-30 min,
-   downloads ~350 MB of tarballs, plugin source, and Mason packages).
-2. On the **offline** VM: the provisioner's `post/60-neovim-offline.sh` hook
-   invokes `NeovimOffline/install.sh --force` automatically during
-   `python3 setup.py --mode install`. It deploys the bundle into the invoking
-   user's `$HOME` (`~/.config/nvim`, `~/.local/share/nvim{,-runtime}`,
-   `~/.local/share/node`, `~/.local/share/jdk-21`) and appends
-   `PATH` + `JAVA_HOME` exports to `~/.bashrc` + `~/.zshrc`.
+- `NeovimOffline/` holds the **tracked source** — `stage.sh`, `install.sh`,
+  and `config/nvim/` (the LazyVim config copied to `~/.config/nvim` during
+  install).
+- `cache/neovim_offline/` holds the **staged artifacts** — tarballs for
+  nvim/node/jdk, every plugin cloned under `share/nvim/lazy/`, every Mason
+  package under `share/nvim/mason/`, and compiled treesitter parsers under
+  `share/nvim/site/`. This dir is regenerated from scratch by `stage.sh`
+  and is covered by the top-level `cache/` gitignore.
 
-The hook is defensive: skips if the bundle is missing, not staged, or already
-deployed. `.gitignore` excludes the staged artifacts (`bin/`, `jdk/`,
-`share/nvim/lazy`, `share/nvim/mason`) since they're large and
-machine-reproducible via `stage.sh`.
+The JetBrainsMono Nerd Font this bundle relies on for icon glyphs is
+installed separately — system-wide — by the `fonts` section.
+
+Workflow:
+
+1. On a **connected** machine: `python3 setup.py --mode prepare` drives
+   the `neovim_offline` installer's prepare step, which invokes
+   `NeovimOffline/stage.sh all` with `BUNDLE_DIR=cache/neovim_offline`.
+   Takes 10–30 min (downloads ~350 MB of tarballs + plugin source + Mason).
+2. On the **offline** VM: `python3 setup.py --mode install` runs the
+   installer's install step, which invokes `NeovimOffline/install.sh
+   --force` with the same `BUNDLE_DIR`. Deploys into the invoking user's
+   `$HOME` (`~/.config/nvim`, `~/.local/share/nvim{,-runtime}`,
+   `~/.local/share/node`, `~/.local/share/jdk-21`) and appends `PATH` +
+   `JAVA_HOME` exports to `~/.bashrc` + `~/.zshrc`.
+
+The installer is defensive: skips install when the bundle is unstaged
+(`cache/neovim_offline/share/nvim/lazy` is absent) or already deployed.
 
 ## Testing
 

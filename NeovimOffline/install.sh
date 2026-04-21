@@ -6,10 +6,31 @@
 #          ./install.sh uninstall     # remove everything install.sh put in place
 #          ./install.sh <cmd> --dry   # preview file operations, do nothing
 #          ./install.sh <cmd> --force # skip confirmation prompts
+#
+# Layout:
+#   SOURCE_DIR  = NeovimOffline/          (tracked — scripts + config/nvim)
+#   BUNDLE_DIR  = cache/neovim_offline/   (artifacts — bin/, jdk/, share/)
+#
+# Override BUNDLE_DIR with the env var of the same name to deploy from a
+# portable bundle (e.g. an air-gap tarball co-located with this script).
 
 set -euo pipefail
 
-BUNDLE="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_DIR="$SOURCE_DIR/config"
+
+if [[ -z "${BUNDLE_DIR:-}" ]]; then
+  candidate="$SOURCE_DIR"
+  while [[ "$candidate" != "/" ]]; do
+    if [[ -f "$candidate/setup.py" && -f "$candidate/vmconfig.yaml" ]]; then
+      BUNDLE_DIR="$candidate/cache/neovim_offline"
+      break
+    fi
+    candidate="$(cd "$candidate/.." && pwd)"
+  done
+  BUNDLE_DIR="${BUNDLE_DIR:-$SOURCE_DIR}"
+fi
+
 DRY=0
 FORCE=0
 ACTION="install"
@@ -84,13 +105,13 @@ do_install() {
   # --- 1. Neovim -----------------------------------------------------------
   log "Installing Neovim $NVIM_VERSION -> $NVIM_ROOT"
   run mkdir -p "$NVIM_ROOT" "$LOCAL_BIN"
-  run tar --strip-components=1 -xzf "$BUNDLE/bin/nvim-linux-x86_64.tar.gz" -C "$NVIM_ROOT"
+  run tar --strip-components=1 -xzf "$BUNDLE_DIR/bin/nvim-linux-x86_64.tar.gz" -C "$NVIM_ROOT"
   run ln -sfn "$NVIM_ROOT/bin/nvim" "$LOCAL_BIN/nvim"
 
   # --- 2. Node.js ----------------------------------------------------------
   log "Installing Node.js $NODE_VERSION -> $NODE_ROOT"
   run mkdir -p "$NODE_ROOT"
-  run tar --strip-components=1 -xJf "$BUNDLE/bin/node-${NODE_VERSION}-linux-x64.tar.xz" -C "$NODE_ROOT"
+  run tar --strip-components=1 -xJf "$BUNDLE_DIR/bin/node-${NODE_VERSION}-linux-x64.tar.xz" -C "$NODE_ROOT"
   for bin in node npm npx; do
     run ln -sfn "$NODE_ROOT/bin/$bin" "$LOCAL_BIN/$bin"
   done
@@ -99,14 +120,14 @@ do_install() {
   log "Installing Temurin JDK 21 -> $JDK_ROOT"
   run mkdir -p "$JDK_ROOT"
   local jdk_archive
-  jdk_archive=$(ls "$BUNDLE/jdk/"OpenJDK21*.tar.gz 2>/dev/null | head -1)
-  [[ -n "$jdk_archive" ]] || die "No JDK archive found in $BUNDLE/jdk/"
+  jdk_archive=$(ls "$BUNDLE_DIR/jdk/"OpenJDK21*.tar.gz 2>/dev/null | head -1)
+  [[ -n "$jdk_archive" ]] || die "No JDK archive found in $BUNDLE_DIR/jdk/"
   run tar --strip-components=1 -xzf "$jdk_archive" -C "$JDK_ROOT"
 
   # --- 4. Config -----------------------------------------------------------
   log "Copying LazyVim config -> $CFG"
   run mkdir -p "$(dirname "$CFG")"
-  run cp -a "$BUNDLE/config/nvim" "$CFG"
+  run cp -a "$CONFIG_DIR/nvim" "$CFG"
 
   # --- 5. Plugins, Mason data, treesitter parsers --------------------------
   log "Copying plugins + mason + site (treesitter) -> $DATA"
@@ -114,10 +135,10 @@ do_install() {
   # Preserve anything the user already has (undo/shada) but replace the
   # subtrees we own.
   run rm -rf "$DATA/lazy" "$DATA/mason" "$DATA/site"
-  run cp -a "$BUNDLE/share/nvim/lazy"  "$DATA/lazy"
-  run cp -a "$BUNDLE/share/nvim/mason" "$DATA/mason"
-  if [[ -d "$BUNDLE/share/nvim/site" ]]; then
-    run cp -a "$BUNDLE/share/nvim/site" "$DATA/site"
+  run cp -a "$BUNDLE_DIR/share/nvim/lazy"  "$DATA/lazy"
+  run cp -a "$BUNDLE_DIR/share/nvim/mason" "$DATA/mason"
+  if [[ -d "$BUNDLE_DIR/share/nvim/site" ]]; then
+    run cp -a "$BUNDLE_DIR/share/nvim/site" "$DATA/site"
   else
     warn "No site/ in bundle — treesitter parsers will be absent."
   fi

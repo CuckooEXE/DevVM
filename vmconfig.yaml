@@ -187,6 +187,7 @@ apt:
     - zstd
     - ca-certificates
     - gnupg
+    - fontconfig               # fc-cache (for NeovimOffline's JetBrainsMono install)
 
     # docker (from the repo configured above)
     - docker-ce

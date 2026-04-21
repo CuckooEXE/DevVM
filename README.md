@@ -36,12 +36,34 @@ Edit `vmconfig.yaml`, run `./bootstrap.sh`, snapshot the VM.
 | `git_sources`     | Clone git repos (single branch default, full-mirror option)                 |
 | `docker`          | Images to pull (and optionally `docker save` to cache)                      |
 | `docs`            | Man-db/info rebuilds, zeal docsets                                          |
+| `NeovimOffline/`  | Bundled LazyVim + plugins + LSPs; `post/60-neovim-offline.sh` runs its installer |
 
 ## Reproducibility
 
 `prepare` writes `vmconfig.lock` with the exact tag/SHA resolved for every
 "latest" entry. Commit the lock file; future runs honor it unless `--refresh`
 is passed.
+
+## NeovimOffline bundle
+
+`NeovimOffline/` is a self-contained, air-gap-safe LazyVim bundle (Neovim +
+every plugin + every LSP/DAP/formatter + JetBrainsMono Nerd Font + OpenJDK 21
+for `jdtls`). It has its own two-phase workflow that mirrors this project's
+`prepare`/`install` split:
+
+1. On a **connected** machine: `cd NeovimOffline && ./stage.sh` (10-30 min,
+   downloads ~350 MB of tarballs, plugin source, and Mason packages).
+2. On the **offline** VM: the provisioner's `post/60-neovim-offline.sh` hook
+   invokes `NeovimOffline/install.sh --force` automatically during
+   `bootstrap.sh --mode install`. It deploys the bundle into the invoking
+   user's `$HOME` (`~/.config/nvim`, `~/.local/share/nvim{,-runtime}`,
+   `~/.local/share/node`, `~/.local/share/jdk-21`, font cache) and appends
+   `PATH` + `JAVA_HOME` exports to `~/.bashrc` + `~/.zshrc`.
+
+The hook is defensive: skips if the bundle is missing, not staged, or already
+deployed. `.gitignore` excludes the staged artifacts (`bin/`, `jdk/`,
+`fonts/`, `share/nvim/lazy`, `share/nvim/mason`) since they're large and
+machine-reproducible via `stage.sh`.
 
 ## Testing
 

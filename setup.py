@@ -27,6 +27,7 @@ SECTION_ORDER = [
     "git_sources",
     "docker",
     "docs",
+    "neovim_offline",
 ]
 
 log = logging.getLogger("setup")

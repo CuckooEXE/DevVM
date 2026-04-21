@@ -167,6 +167,17 @@
         "rebuild_info":  {"type": "boolean"},
         "zeal_docsets":  {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
       }
+    },
+
+    "neovim_offline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled":     {"type": "boolean"},
+        "stage_mode":  {"enum": ["all", "fetch", "none"]},
+        "bundle_dir":  {"type": "string"},
+        "home":        {"type": "string"}
+      }
     }
   }
 }

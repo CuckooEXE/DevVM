@@ -618,3 +618,20 @@ docs:
     - PostgreSQL
     - SQLite
     - Redis
+
+neovim_offline:
+  # Self-contained LazyVim bundle under ./NeovimOffline/. The `prepare` phase
+  # runs stage.sh (downloads nvim/node/JDK/fonts, clones every plugin, installs
+  # every Mason LSP, compiles treesitter parsers). The `install` phase runs
+  # install.sh which deploys everything into the invoking user's $HOME with no
+  # further network access required.
+  enabled: true
+  # stage_mode:
+  #   all    — full stage: fetch tarballs AND resolve plugins/mason/treesitter.
+  #            Needs gcc/make/unzip on PATH (covered by apt.packages once
+  #            install has run once). On a fresh host, run --mode full twice,
+  #            or run stage.sh manually once to prime things.
+  #   fetch  — download tarballs only; skip headless nvim run. Useful on
+  #            offline-build pipelines where you stage plugins elsewhere.
+  #   none   — skip staging entirely. install-phase still deploys if already staged.
+  stage_mode: all

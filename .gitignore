@@ -50,7 +50,6 @@ Desktop.ini
 NeovimOffline/bin/*.tar.gz
 NeovimOffline/bin/*.tar.xz
 NeovimOffline/jdk/*.tar.gz
-NeovimOffline/fonts/*.zip
 NeovimOffline/share/nvim/lazy/
 NeovimOffline/share/nvim/mason/
 NeovimOffline/share/nvim/site/

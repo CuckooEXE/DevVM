@@ -36,6 +36,7 @@ Edit `vmconfig.yaml`, run `./bootstrap.sh`, snapshot the VM.
 | `git_sources`     | Clone git repos (single branch default, full-mirror option)                 |
 | `docker`          | Images to pull (and optionally `docker save` to cache)                      |
 | `docs`            | Man-db/info rebuilds, zeal docsets                                          |
+| `vscode_extensions` | Marketplace IDs installed via `code --install-extension`                 |
 | `NeovimOffline/`  | Bundled LazyVim + plugins + LSPs; `post/60-neovim-offline.sh` runs its installer |
 
 ## Reproducibility
@@ -47,8 +48,10 @@ is passed.
 ## NeovimOffline bundle
 
 `NeovimOffline/` is a self-contained, air-gap-safe LazyVim bundle (Neovim +
-every plugin + every LSP/DAP/formatter + JetBrainsMono Nerd Font + OpenJDK 21
-for `jdtls`). It has its own two-phase workflow that mirrors this project's
+every plugin + every LSP/DAP/formatter + OpenJDK 21 for `jdtls`). The
+JetBrainsMono Nerd Font it relies on for icon glyphs is installed separately,
+system-wide, by `post/05-fonts.sh`. It has its own two-phase workflow that
+mirrors this project's
 `prepare`/`install` split:
 
 1. On a **connected** machine: `cd NeovimOffline && ./stage.sh` (10-30 min,
@@ -57,12 +60,12 @@ for `jdtls`). It has its own two-phase workflow that mirrors this project's
    invokes `NeovimOffline/install.sh --force` automatically during
    `bootstrap.sh --mode install`. It deploys the bundle into the invoking
    user's `$HOME` (`~/.config/nvim`, `~/.local/share/nvim{,-runtime}`,
-   `~/.local/share/node`, `~/.local/share/jdk-21`, font cache) and appends
+   `~/.local/share/node`, `~/.local/share/jdk-21`) and appends
    `PATH` + `JAVA_HOME` exports to `~/.bashrc` + `~/.zshrc`.
 
 The hook is defensive: skips if the bundle is missing, not staged, or already
 deployed. `.gitignore` excludes the staged artifacts (`bin/`, `jdk/`,
-`fonts/`, `share/nvim/lazy`, `share/nvim/mason`) since they're large and
+`share/nvim/lazy`, `share/nvim/mason`) since they're large and
 machine-reproducible via `stage.sh`.
 
 ## Testing

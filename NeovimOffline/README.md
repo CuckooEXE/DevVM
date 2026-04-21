@@ -15,7 +15,6 @@ JavaScript/TypeScript/HTML/CSS, Docker.
 NeovimOffline/
 ├── bin/              nvim + node tarballs
 ├── jdk/              OpenJDK 21 (for jdtls Java LSP)
-├── fonts/            JetBrainsMono Nerd Font
 ├── config/nvim/      the LazyVim config that gets copied to ~/.config/nvim
 ├── share/nvim/
 │   ├── lazy/         every plugin, pre-cloned
@@ -37,11 +36,14 @@ On this staging machine (Debian 13, online, has `git`, `curl`, `gcc`, `make`,
 
 This takes 10–30 minutes depending on bandwidth. It:
 
-1. Downloads Neovim, Node.js, JDK, and the Nerd Font tarballs into the bundle.
+1. Downloads Neovim, Node.js, and JDK tarballs into the bundle.
 2. Extracts them to a scratch `.stage/` dir and runs Neovim headlessly against
    the staged config, triggering `:Lazy sync`, `:MasonInstall`, and
    `:TSInstallSync` against every plugin/package/parser we need.
 3. Copies the resulting `lazy/` and `mason/` trees into `share/nvim/`.
+
+The Nerd Font used by LazyVim icons is installed by the parent
+`DevVMSetup` pipeline (`post/05-fonts.sh`), not this bundle.
 
 Re-runnable — each step (`./stage.sh fetch|plugins|mason|ts|copy`) is
 idempotent. If a download fails, just re-run it.
@@ -68,7 +70,6 @@ Installs into your `$HOME` (no root needed):
 - `~/.local/share/nvim-runtime/` — Neovim runtime
 - `~/.local/share/node/` — Node.js (for JS-based LSPs)
 - `~/.local/share/jdk-21/` — OpenJDK 21 (for jdtls)
-- `~/.local/share/fonts/JetBrainsMono/` — Nerd Font
 - `~/.config/nvim/` — LazyVim config
 - `~/.local/share/nvim/{lazy,mason}` — plugins + LSPs
 - Appends `PATH` + `JAVA_HOME` exports to `~/.bashrc` / `~/.zshrc`
@@ -105,7 +106,8 @@ available bindings. That's the fastest way to discover keymaps.
 
 Set your terminal emulator's font to **"JetBrainsMono Nerd Font"** (any
 weight — Regular works) so LazyVim's icons render. Without a Nerd Font you'll
-see boxes/question marks where icons should be.
+see boxes/question marks where icons should be. The font is installed
+system-wide by `DevVMSetup/post/05-fonts.sh` (not by this bundle).
 
 ## Updating the bundle
 
@@ -162,7 +164,6 @@ the user's prior Zig install layout) and falls back to `zls` on PATH. Install
 | `~/.local/share/nvim-runtime/`       | `bin/nvim-linux-*.tar.gz` |
 | `~/.local/share/node/`               | `bin/node-*.tar.xz`     |
 | `~/.local/share/jdk-21/`             | `jdk/OpenJDK21*.tar.gz` |
-| `~/.local/share/fonts/JetBrainsMono/`| `fonts/JetBrainsMono.zip` |
 | `~/.config/nvim/`                    | `config/nvim/`          |
 | `~/.local/share/nvim/lazy/`          | `share/nvim/lazy/`      |
 | `~/.local/share/nvim/mason/`         | `share/nvim/mason/`     |

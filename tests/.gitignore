@@ -1,0 +1,3 @@
+# Everything the test harness generates lives here. The base cloud image
+# (~400 MB), the qcow2 overlay, the seed ISO, SSH keys, pidfiles, logs.
+.vm/

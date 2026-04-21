@@ -78,6 +78,13 @@ def _preseed_debconf(packages: list[str], ctx) -> None:
             "wireshark-common wireshark-common/install-setuid boolean true"
         )
 
+    # vscode (`code`) — its postinst asks whether to register the
+    # Microsoft apt repo (`code/add-microsoft-repo`). We already configured
+    # it declaratively via apt.repos, so answer "no" to suppress the prompt
+    # and to avoid a second, duplicate sources.list entry.
+    if "code" in pkgs:
+        selections.append("code code/add-microsoft-repo boolean false")
+
     if not selections:
         return
 

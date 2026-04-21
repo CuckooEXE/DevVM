@@ -25,7 +25,7 @@ append_init() {
     cat >> "$rcfile" <<EOF
 
 $MARK
-eval "\$(atuin init $shell_name)"
+eval "\$(atuin init $shell_name --disable-up-arrow)"
 # <<< DevVMSetup atuin <<<
 EOF
     echo "post/50-atuin-init: added atuin init to $rcfile"

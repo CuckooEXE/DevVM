@@ -9,6 +9,15 @@ apt:
       components: [stable]
       key_url: https://download.docker.com/linux/debian/gpg
 
+    # Microsoft Visual Studio Code repo (provides the `code` package).
+    # arch=amd64 keeps the sources file single-arch — matching the VM target.
+    - name: vscode
+      uri: https://packages.microsoft.com/repos/code
+      suite: stable
+      components: [main]
+      arch: amd64
+      key_url: https://packages.microsoft.com/keys/microsoft.asc
+
   packages:
     # build / compilers
     - build-essential
@@ -76,9 +85,10 @@ apt:
     - musl-tools               # small static binaries
     - valgrind
     - checksec                 # binary hardening checker
-    # capstone (disassembler) — libcapstone-dev provides libs, headers, and the
-    # `cstool` binary. There is no separate 'cstool' package in Trixie.
+    # capstone (disassembler): libcapstone-dev ships libs+headers only; the
+    # `cstool` CLI lives in the separate `capstone-tool` package on Trixie.
     - libcapstone-dev
+    - capstone-tool
     # keystone (assembler) is not in Debian — built from source via git_sources below.
     # cmake + ninja + build-essential above cover its build deps.
 
@@ -172,6 +182,7 @@ apt:
     - zsh
     - zsh-autosuggestions
     - tmux
+    - terminator               # preferred terminal emulator
     - neovim
     - vim
     - htop
@@ -187,7 +198,8 @@ apt:
     - zstd
     - ca-certificates
     - gnupg
-    - fontconfig               # fc-cache (for NeovimOffline's JetBrainsMono install)
+    - apt-transport-https      # required for the Microsoft vscode apt repo
+    - fontconfig               # fc-cache (used by post/05-fonts.sh)
 
     # docker (from the repo configured above)
     - docker-ce
@@ -195,6 +207,12 @@ apt:
     - containerd.io
     - docker-buildx-plugin
     - docker-compose-plugin
+
+    # VSCode (from the Microsoft repo configured above). The .deb postinst
+    # asks whether to add the Microsoft apt repo — we answer "no" via
+    # debconf-set-selections in installers/apt.py because the repo is
+    # already wired up declaratively.
+    - code
 
     # offline doc viewer
     - zeal
@@ -545,6 +563,31 @@ git_sources:
     # (angr is heavy; install via `pip install angr` in a venv — the clone
     # here is for reading the source / developing against it)
 
+  # binwalk — firmware analysis. ReFirmLabs stopped publishing the
+  # `refirmlabs/binwalk` image; the sanctioned path is to clone the repo
+  # and build the image locally. post/40-binwalk-wrapper.sh points at the
+  # tag we build here.
+  - url: https://github.com/ReFirmLabs/binwalk
+    dest: ~/src/binwalk
+    branch: master
+    skip_if_command: binwalk
+    post_install:
+      # Build as the invoking user (they'll be in the docker group by the
+      # time post/ hooks run; inside installer phase we fall back to sudo
+      # if the socket isn't writable yet).
+      - |
+        if docker info >/dev/null 2>&1; then
+          docker build -t devvmsetup/binwalk:local .
+        else
+          sudo docker build -t devvmsetup/binwalk:local .
+        fi
+
+  # Dracula color scheme for Terminator. post/06-dracula-terminator.sh
+  # merges the snippet from this repo into ~/.config/terminator/config.
+  - url: https://github.com/dracula/terminator
+    dest: ~/src/dracula-terminator
+    branch: master
+
   # Example of a full-history clone (all branches, full commit history).
   # Uncomment and point at a repo where you actually want the full history:
   # - url: https://github.com/torvalds/linux
@@ -570,14 +613,15 @@ docker:
     - nginx:latest
     - kalilinux/kali-rolling:latest
     - remnux/remnux-distro:focal
-    # latest binwalk (v3+, Rust rewrite) ships as a docker image.
-    # post/40-binwalk-wrapper.sh drops a /usr/local/bin/binwalk shim that invokes it.
-    - refirmlabs/binwalk:latest
+    # NOTE: binwalk is no longer pulled from a registry — ReFirmLabs stopped
+    # publishing refirmlabs/binwalk. Instead, we clone the repo via
+    # git_sources and build the image locally as `devvmsetup/binwalk:local`
+    # in a post_install step. post/40-binwalk-wrapper.sh invokes that tag.
 
     # --- offensive tooling in containers ---
     - metasploitframework/metasploit-framework:latest
     - mitmproxy/mitmproxy:latest
-    - owasp/zap2docker-stable:latest   # legacy name; update to softwaresecurityproject/zap-stable if pulls stop working
+    - zaproxy/zap-stable:latest        # the owasp/zap2docker-* names are deprecated
 
     # --- intentionally vulnerable targets (for practice / research only) ---
     - bkimminich/juice-shop:latest     # OWASP Juice Shop
@@ -591,11 +635,14 @@ docs:
   # the installer logs a warning and skips — so speculative entries are
   # harmless. Each docset is ~10-200 MB; this list is ~2-3 GB total.
   zeal_docsets:
+    # Names below must match a feed file in https://github.com/Kapeli/feeds
+    # (the stem of `<name>.xml` is the docset name here). Python_3,
+    # Regular_Expressions, and GCC all 404 from the kapeli mirrors despite
+    # being tempting to list — drop them rather than chase broken feeds.
     # Languages you work in
     - C
     - C++
     - Rust
-    - Python_3
     - Bash
     # Languages you'll read 3rd-party source in
     - Go
@@ -606,18 +653,56 @@ docs:
     - Man_Pages
     # Build / infra tooling
     - CMake
-    - GCC
     - Docker
     - Git
     - Vim
     # Quick-lookup references
     - HTTP
     - Markdown
-    - Regular_Expressions
     # Databases
     - PostgreSQL
     - SQLite
     - Redis
+
+vscode_extensions:
+  # Installed via `code --install-extension` after `code` is on PATH.
+  # Runs as the invoking user so extensions land in ~/.vscode/extensions.
+  # Idempotent: re-running is a no-op for already-installed extensions.
+  extensions:
+    - ms-python.python
+    - ms-python.vscode-pylance
+    - ms-python.debugpy
+    - ms-python.black-formatter
+    - ms-toolsai.jupyter
+    - ms-vscode.cpptools
+    - ms-vscode.cpptools-themes
+    - ms-vscode.cpptools-extension-pack
+    - ms-vscode.cmake-tools
+    - ms-vscode.makefile-tools
+    - ms-vscode.hexeditor
+    - ms-vscode.remote-explorer
+    - ms-vscode.remote-server
+    - ms-vscode-remote.remote-wsl
+    - ms-vscode-remote.remote-containers
+    - ms-vscode-remote.remote-ssh
+    - ms-vscode-remote.remote-ssh-edit
+    - ms-vscode-remote.vscode-remote-extensionpack
+    - ms-azuretools.vscode-docker
+    - ms-dotnettools.csharp
+    - xaver.clang-format
+    - twxs.cmake
+    - ziglang.vscode-zig
+    - rust-lang.rust-analyzer
+    - redhat.java
+    - redhat.vscode-yaml
+    - esbenp.prettier-vscode
+    - njpwerner.autodocstring
+    - donjayamanne.python-extension-pack
+    - yzhang.markdown-all-in-one
+    - DavidAnson.vscode-markdownlint
+    - cschlosser.doxdocgen
+    - vadimcn.vscode-lldb
+    - dracula-theme.theme-dracula
 
 neovim_offline:
   # Self-contained LazyVim bundle under ./NeovimOffline/. The `prepare` phase

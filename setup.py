@@ -27,6 +27,7 @@ SECTION_ORDER = [
     "git_sources",
     "docker",
     "docs",
+    "vscode_extensions",
     "neovim_offline",
 ]
 
@@ -143,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="ignore vmconfig.lock and re-resolve 'latest' versions")
     ap.add_argument("--only", action="append", default=[],
                     help="limit to named section(s); repeatable")
+    ap.add_argument("--skip", action="append", default=[],
+                    help="skip named section(s); repeatable. Useful to bypass "
+                         "a section that's failing (e.g. --skip github_releases "
+                         "when the GitHub API is rate-limiting you)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -172,6 +177,13 @@ def main(argv: list[str] | None = None) -> int:
     sections = SECTION_ORDER
     if args.only:
         sections = [s for s in sections if s in args.only]
+    if args.skip:
+        unknown = [s for s in args.skip if s not in SECTION_ORDER]
+        if unknown:
+            log.warning("--skip ignores unknown section(s): %s "
+                        "(valid: %s)", ", ".join(unknown), ", ".join(SECTION_ORDER))
+        sections = [s for s in sections if s not in args.skip]
+        log.info("skipping section(s): %s", ", ".join(args.skip))
 
     if ctx.phase_prepare():
         for section in sections:

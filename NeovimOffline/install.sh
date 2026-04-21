@@ -42,7 +42,7 @@ run()  {
 [[ "$(uname -s)" == "Linux" ]] || die "This bundle is Linux-only."
 [[ "$(uname -m)" == "x86_64" ]] || die "This bundle targets x86_64."
 if [[ "$ACTION" == "install" ]]; then
-  for tool in tar unzip curl fc-cache; do
+  for tool in tar unzip curl; do
     command -v "$tool" >/dev/null || die "Missing required tool: $tool"
   done
 fi
@@ -54,7 +54,6 @@ LOCAL_BIN="$HOME/.local/bin"
 NVIM_ROOT="$HOME/.local/share/nvim-runtime"
 NODE_ROOT="$HOME/.local/share/node"
 JDK_ROOT="$HOME/.local/share/jdk-21"
-FONT_DIR="$HOME/.local/share/fonts/JetBrainsMono"
 
 # ===========================================================================
 # install
@@ -66,7 +65,6 @@ do_install() {
   log "  nvim:       $NVIM_ROOT  (symlink -> $LOCAL_BIN/nvim)"
   log "  node:       $NODE_ROOT"
   log "  jdk-21:     $JDK_ROOT"
-  log "  fonts:      $FONT_DIR"
 
   # --- Existing config guard -----------------------------------------------
   if [[ -e "$CFG" ]]; then
@@ -124,13 +122,7 @@ do_install() {
     warn "No site/ in bundle — treesitter parsers will be absent."
   fi
 
-  # --- 6. Fonts ------------------------------------------------------------
-  log "Installing JetBrainsMono Nerd Font"
-  run mkdir -p "$FONT_DIR"
-  run unzip -oq "$BUNDLE/fonts/JetBrainsMono.zip" -d "$FONT_DIR"
-  run fc-cache -f "$FONT_DIR"
-
-  # --- 7. Shell rc ---------------------------------------------------------
+  # --- 6. Shell rc ---------------------------------------------------------
   add_rc() {
     local rc="$1"
     [[ -f "$rc" ]] || return 0
@@ -196,7 +188,6 @@ do_uninstall() {
   [[ -e "$NVIM_ROOT" ]] && targets+=("$NVIM_ROOT")
   [[ -e "$NODE_ROOT" ]] && targets+=("$NODE_ROOT")
   [[ -e "$JDK_ROOT"  ]] && targets+=("$JDK_ROOT")
-  [[ -e "$FONT_DIR"  ]] && targets+=("$FONT_DIR")
   for sub in lazy mason site; do
     [[ -e "$DATA/$sub" ]] && targets+=("$DATA/$sub")
   done
@@ -255,11 +246,6 @@ do_uninstall() {
       sed -i.nvim-offline-bak '/^# --- NeovimOffline bundle/,/^# ---------*$/d' "$rc"
     fi
   done
-
-  if command -v fc-cache >/dev/null; then
-    log "Refreshing font cache"
-    run fc-cache -f || true
-  fi
 
   log "Uninstall complete. Open a new shell to drop the removed PATH/JAVA_HOME exports."
 }

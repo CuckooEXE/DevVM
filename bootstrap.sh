@@ -12,6 +12,13 @@ REQUIRED_APT=(
     curl
     gnupg
     git                 # git_sources prepare uses `git clone --mirror`
+    # The prepare phase runs before apt.install, so anything prepare steps
+    # invoke has to already be on PATH. neovim_offline's stage.sh in
+    # particular wants unzip (Nerd Font zip, mason artifacts) and a full
+    # C toolchain (nvim-treesitter compiles parsers with gcc+make).
+    unzip
+    gcc
+    make
 )
 
 here() { cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }

@@ -169,6 +169,14 @@
       }
     },
 
+    "vscode_extensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+
     "neovim_offline": {
       "type": "object",
       "additionalProperties": false,

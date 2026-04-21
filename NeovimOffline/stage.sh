@@ -9,8 +9,8 @@
 #          ./stage.sh copy      # copy staged results into the bundle
 #          ./stage.sh clean     # remove build artifacts (.stage, .downloads,
 #                                 share/nvim/{lazy,mason,site}). Tarballs in
-#                                 bin/, jdk/, fonts/ are kept — delete those
-#                                 manually to force a re-fetch.
+#                                 bin/, jdk/ are kept — delete those manually
+#                                 to force a re-fetch.
 #
 # Running with no argument does all steps in order. Each step is idempotent;
 # re-running skips work already completed.
@@ -37,7 +37,7 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$DL" "$STAGE_CFG" "$STAGE_DATA" "$STAGE_STATE" "$STAGE_CACHE"
-mkdir -p "$BUNDLE/bin" "$BUNDLE/jdk" "$BUNDLE/fonts" "$BUNDLE/share/nvim"
+mkdir -p "$BUNDLE/bin" "$BUNDLE/jdk" "$BUNDLE/share/nvim"
 
 # ----------------------------------------------------------------------
 # Step: fetch — download all tarballs into $BUNDLE/bin, $BUNDLE/jdk, $BUNDLE/fonts
@@ -61,12 +61,6 @@ do_fetch() {
   if [[ ! -s "$BUNDLE/jdk/$JDK_FILE" ]]; then
     curl -fL --retry 3 -o "$BUNDLE/jdk/$JDK_FILE" \
       "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-${JDK_VERSION}/${JDK_FILE}"
-  fi
-
-  log "Fetching JetBrainsMono Nerd Font …"
-  if [[ ! -s "$BUNDLE/fonts/JetBrainsMono.zip" ]]; then
-    curl -fL --retry 3 -o "$BUNDLE/fonts/JetBrainsMono.zip" \
-      "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
   fi
 
   log "Fetching tree-sitter CLI ${TS_CLI_VERSION} (staging-only) …"
@@ -136,11 +130,16 @@ extract_toolchain() {
 do_plugins() {
   extract_toolchain
   log "Cloning all lazy.nvim plugin specs (this clones ~60 repos) …"
-  # First pass bootstraps LazyVim itself and eager plugins.
-  nvim --headless "+Lazy! sync" "+qa" 2>&1 | tail -5 || true
+  log "  → streaming nvim output; full log at $STAGE/plugins.log"
+  # First pass bootstraps LazyVim itself and eager plugins. stdbuf -oL
+  # forces line-buffered stdout so progress reaches the terminal as it
+  # happens instead of appearing in one burst at the end.
+  stdbuf -oL -eL nvim --headless "+Lazy! sync" "+qa" 2>&1 \
+    | tee "$STAGE/plugins.log" || true
   # Second pass forces install of every lazy-loaded spec (the first pass
   # skips them because they're not loaded yet).
-  nvim --headless "+Lazy! install" "+qa" 2>&1 | tail -5 || true
+  stdbuf -oL -eL nvim --headless "+Lazy! install" "+qa" 2>&1 \
+    | tee -a "$STAGE/plugins.log" || true
 
   if [[ ! -d "$STAGE_DATA/nvim/lazy/LazyVim" ]]; then
     die "LazyVim plugin didn't install. Check network and lua/config/lazy.lua."
@@ -175,7 +174,7 @@ MASON_PKGS=(
 
 do_mason() {
   extract_toolchain
-  log "Installing ${#MASON_PKGS[@]} Mason packages …"
+  log "Installing ${#MASON_PKGS[@]} Mason packages (bypassing LazyVim to avoid install races)"
 
   # Write the package list into a helper file Lua can read, avoiding any
   # shell-quoting pitfalls with the Mason install logic.
@@ -185,6 +184,35 @@ do_mason() {
     for p in "${MASON_PKGS[@]}"; do printf '  "%s",\n' "$p"; done
     echo '}'
     cat <<'LUA'
+-- Run under `nvim --clean`: no init.lua, no LazyVim, no lazy.nvim. That
+-- eliminates a whole class of races: LazyVim's lsp-extras register a
+-- `mason-registry.refresh` callback that calls `pkg:install()` on every
+-- package in its ensure_installed list *without* a pre-check, which then
+-- asserts ("Package is already installing") as soon as our loop or any
+-- other caller has already queued one of those packages. The assert fires
+-- inside mason's async runtime, which wedges the task scheduler and
+-- leaves pending installs stuck forever. Running clean sidesteps all of
+-- that — we only need mason.nvim itself to drive installs.
+
+-- Locate the staged mason.nvim and bolt it onto the runtimepath manually.
+-- The stage step lives at $XDG_DATA_HOME/nvim/lazy/mason.nvim/ (that's
+-- where `do_plugins` put it via `:Lazy! sync`). stdpath("data") respects
+-- XDG_DATA_HOME, which extract_toolchain has exported for us.
+local data = vim.fn.stdpath("data")
+local mason_dir = data .. "/lazy/mason.nvim"
+if vim.fn.isdirectory(mason_dir) == 0 then
+  print("ABORT: mason.nvim not found at " .. mason_dir
+        .. " — run `./stage.sh plugins` first")
+  vim.cmd("cq 1")
+end
+vim.opt.rtp:prepend(mason_dir)
+-- Some mason versions ship plugin/*.lua auto-load hooks. Without
+-- lazy.nvim those don't fire, so source them by hand.
+for _, f in ipairs(vim.fn.glob(mason_dir .. "/plugin/*.lua", false, true)) do
+  local ok, err = pcall(dofile, f)
+  if not ok then print("warn: failed to source " .. f .. ": " .. tostring(err)) end
+end
+
 require("mason").setup()
 local registry = require("mason-registry")
 
@@ -199,6 +227,8 @@ if not refreshed then
   vim.cmd("cq 1")
 end
 
+-- Kick off installs. With LazyVim out of the picture, we are the only
+-- caller of pkg:install(), so no race to worry about.
 local handles = {}
 for _, name in ipairs(pkgs) do
   local ok, pkg = pcall(registry.get_package, name)
@@ -206,10 +236,13 @@ for _, name in ipairs(pkgs) do
     print("UNKNOWN: " .. name)
   elseif pkg:is_installed() then
     print("skip (already installed): " .. name)
+  elseif pkg:is_installing() then
+    -- Possible if a stale install from a previous (crashed) run survived
+    -- in mason's state. Let it finish rather than restarting it.
+    print("skip (already installing from earlier run): " .. name)
   else
     print("installing: " .. name)
-    local h = pkg:install()
-    handles[name] = h
+    handles[name] = pkg:install()
   end
 end
 
@@ -248,8 +281,17 @@ LUA
   } > "$helper"
 
   # Use +luafile (not -l) so init.lua loads first and mason is on rtp.
-  nvim --headless "+luafile $helper" 2>&1 | tail -80 || {
+  # Stream output live: Mason downloads ~500 MB of LSP servers (jdtls alone
+  # is ~200 MB) and can run for 10–30 min. Without live output the terminal
+  # looks hung; with it you see the Lua helper's 15-second progress pings
+  # ("  ... N/32 still pending") and per-package "installing: …" lines.
+  log "  → streaming nvim output; full log at $STAGE/mason.log"
+  # `--clean` = no user init, no plugins, no shada. We set up rtp manually
+  # in the helper Lua. Bypasses LazyVim's racing ensure_installed callback.
+  stdbuf -oL -eL nvim --headless --clean "+luafile $helper" 2>&1 \
+    | tee "$STAGE/mason.log" || {
     warn "Some Mason packages failed. Re-run: ./stage.sh mason"
+    warn "Full log: $STAGE/mason.log"
     return 1
   }
   log "All Mason packages installed."
@@ -267,7 +309,7 @@ TS_LANGS=(
 
 do_ts() {
   extract_toolchain
-  log "Installing ${#TS_LANGS[@]} treesitter parsers (compiles with gcc) …"
+  log "Installing ${#TS_LANGS[@]} treesitter parsers (compiles with gcc, bypassing LazyVim) …"
 
   # nvim-treesitter main-branch only exposes async :TSInstall — drive it
   # through Lua so we can block on the returned Task.
@@ -277,6 +319,27 @@ do_ts() {
     for l in "${TS_LANGS[@]}"; do printf '  "%s",\n' "$l"; done
     echo '}'
     cat <<'LUA'
+-- Run under `nvim --clean` so LazyVim's treesitter ensure_installed hook
+-- doesn't register a competing install task. (Same class of race as the
+-- mason step — LazyVim's lsp extras auto-install parsers on startup; if
+-- those tasks interleave with ours, nvim-treesitter's async runtime can
+-- error and leave parsers half-compiled.)
+
+-- Bolt nvim-treesitter onto the runtimepath directly. It lives at
+-- $XDG_DATA_HOME/nvim/lazy/nvim-treesitter/ after `do_plugins`.
+local data = vim.fn.stdpath("data")
+local ts_dir = data .. "/lazy/nvim-treesitter"
+if vim.fn.isdirectory(ts_dir) == 0 then
+  print("ABORT: nvim-treesitter not found at " .. ts_dir
+        .. " — run `./stage.sh plugins` first")
+  vim.cmd("cq 1")
+end
+vim.opt.rtp:prepend(ts_dir)
+for _, f in ipairs(vim.fn.glob(ts_dir .. "/plugin/*.lua", false, true)) do
+  local ok, err = pcall(dofile, f)
+  if not ok then print("warn: failed to source " .. f .. ": " .. tostring(err)) end
+end
+
 local install = require("nvim-treesitter.install").install
 local task = install(langs, { summary = true, force = true })
 local ok, err = pcall(function() task:wait(30 * 60 * 1000) end)
@@ -301,8 +364,11 @@ end
 LUA
   } > "$helper"
 
-  nvim --headless "+luafile $helper" 2>&1 | tail -40 || {
+  log "  → streaming nvim output; full log at $STAGE/ts.log"
+  stdbuf -oL -eL nvim --headless --clean "+luafile $helper" 2>&1 \
+    | tee "$STAGE/ts.log" || {
     warn "Some treesitter parsers failed. Re-run: ./stage.sh ts"
+    warn "Full log: $STAGE/ts.log"
     return 1
   }
 }
@@ -352,7 +418,7 @@ do_clean() {
   for t in "${found[@]}"; do
     printf '  %s  (%s)\n' "$t" "$(du -sh "$t" 2>/dev/null | cut -f1)" >&2
   done
-  log "(Downloaded tarballs under bin/, jdk/, fonts/ are kept.)"
+  log "(Downloaded tarballs under bin/, jdk/ are kept.)"
 
   read -r -p "Proceed? [y/N] " ans
   case "$ans" in

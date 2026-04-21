@@ -1,0 +1,51 @@
+#cloud-config
+# Template rendered by tests/run-vm.sh. The only substitution performed is
+# @@SSH_PUBKEY@@ — the test harness replaces it with the contents of the
+# generated tests/.vm/ssh_key.pub before building the seed ISO.
+
+hostname: devvmsetup-test
+preserve_hostname: false
+
+# Grow the root filesystem to fill whatever we resized the qcow2 to.
+growpart:
+  mode: auto
+  devices: ['/']
+  ignore_growroot_disabled: false
+resize_rootfs: true
+
+users:
+  - name: tester
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: false
+    # Matches `tester` hashed with `openssl passwd -6 tester`. Only useful
+    # for the serial console; SSH access is key-based.
+    passwd: "$6$devvmsetup$G5ufuk1kMd8pVNhvL.xJb1mYO/QAWGZR0.OGS51K/CqTHpS6yGkj/2Nvs3X2T9YuSWX/sh/Dhr0tCEjVnYUqh0"
+    ssh_authorized_keys:
+      - "@@SSH_PUBKEY@@"
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+package_upgrade: false
+packages:
+  - openssh-server
+  - rsync
+  - sudo
+  - ca-certificates
+
+write_files:
+  # Small flag file the host polls for so it knows cloud-init is complete.
+  - path: /etc/profile.d/devvmsetup-test.sh
+    permissions: '0644'
+    content: |
+      export DEVVMSETUP_TEST_VM=1
+
+runcmd:
+  - systemctl enable --now ssh
+  - install -d -o tester -g tester /home/tester/DevVMSetup
+  - touch /var/lib/cloud/instance/devvmsetup-ready
+
+final_message: "cloud-init finished after $UPTIME seconds (devvmsetup-test)"

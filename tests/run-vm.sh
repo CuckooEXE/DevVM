@@ -15,6 +15,10 @@
 #   ssh          SSH into the running VM.
 #   sync         Re-rsync the host repo into the running VM. Use this after
 #                editing files on the host without restarting the VM.
+#   pull-cache   Rsync the VM's cache/ directory back to the host
+#                (e.g. after running `setup.py --mode prepare` in the VM).
+#   push-cache   Rsync the host's cache/ directory into the VM
+#                (e.g. to seed an offline install from a prepared bundle).
 #   console      Tail the serial-console log (great for debugging boot hangs).
 #   status       Report whether the VM is running, its PID, and SSH port.
 #   destroy      Kill QEMU and remove the overlay disk. Base image + SSH keys
@@ -46,7 +50,7 @@ CLOUD_INIT_DIR="$SCRIPT_DIR/cloud-init"
 DEFAULT_CPUS=4
 DEFAULT_MEM=8           # GiB
 DEFAULT_PORT=2222
-DEFAULT_DISK_SIZE=40    # GiB
+DEFAULT_DISK_SIZE=100    # GiB
 BASE_IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2"
 BASE_IMAGE_SHA_URL="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
 BASE_IMAGE_NAME="debian-13-generic-amd64.qcow2"
@@ -75,7 +79,7 @@ ok()   { printf '%s[ok]%s %s\n'    "$C_GRN"  "$C_RST" "$*" >&2; }
 # --- argv parsing ----------------------------------------------------------
 while (( $# )); do
     case "$1" in
-        up|boot|ssh|sync|console|status|destroy|clean) COMMAND="$1"; shift ;;
+        up|boot|ssh|sync|pull-cache|push-cache|console|status|destroy|clean) COMMAND="$1"; shift ;;
         --fresh)        FRESH=1; shift ;;
         --skip-install) SKIP_INSTALL=1; shift ;;
         --memory)       MEM="$2"; shift 2 ;;
@@ -191,28 +195,31 @@ ensure_overlay() {
 
 # ---------------------------------------------------------------------------
 build_seed_iso() {
-    local tmp
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' RETURN
-
+    # Render user-data + meta-data directly inside $VM_DIR. We used to
+    # stage into a mktemp dir with a `trap '…' RETURN`, but bash's RETURN
+    # traps aren't function-local without `set -o functrace` — they
+    # persist globally and fire on every subsequent function return, at
+    # which point the captured $tmp is out of scope and set -u aborts.
+    # Keeping the tiny cloud-init files in VM_DIR also makes them handy
+    # for debugging boot issues after the fact.
     local pub
     pub="$(cat "$SSH_PUBKEY")"
     sed "s|@@SSH_PUBKEY@@|${pub//|/\\|}|" \
-        "$CLOUD_INIT_DIR/user-data.tmpl" > "$tmp/user-data"
-    cp "$CLOUD_INIT_DIR/meta-data" "$tmp/meta-data"
+        "$CLOUD_INIT_DIR/user-data.tmpl" > "$VM_DIR/user-data"
+    cp "$CLOUD_INIT_DIR/meta-data" "$VM_DIR/meta-data"
 
     log "building cloud-init seed via $ISO_TOOL"
     case "$ISO_TOOL" in
         cloud-localds)
-            cloud-localds "$SEED_ISO" "$tmp/user-data" "$tmp/meta-data"
+            cloud-localds "$SEED_ISO" "$VM_DIR/user-data" "$VM_DIR/meta-data"
             ;;
         genisoimage)
             genisoimage -quiet -output "$SEED_ISO" -volid cidata \
-                -joliet -rock "$tmp/user-data" "$tmp/meta-data"
+                -joliet -rock "$VM_DIR/user-data" "$VM_DIR/meta-data"
             ;;
         xorriso)
             xorriso -as mkisofs -quiet -o "$SEED_ISO" -V cidata \
-                -J -r "$tmp/user-data" "$tmp/meta-data"
+                -J -r "$VM_DIR/user-data" "$VM_DIR/meta-data"
             ;;
     esac
 }
@@ -366,6 +373,26 @@ cmd_ssh() {
     open_shell
 }
 
+cmd_pull_cache() {
+    vm_running || die "VM is not running (did you run 'up' or 'boot' first?)"
+    log "rsyncing tester@127.0.0.1:DevVMSetup/cache/ → $REPO_DIR/cache/"
+    rsync -avh --progress \
+        -e "ssh ${ssh_opts[*]}" \
+        "tester@127.0.0.1:DevVMSetup/cache/" "$REPO_DIR/cache/"
+    ok "pulled cache from VM"
+}
+
+cmd_push_cache() {
+    vm_running || die "VM is not running (did you run 'up' or 'boot' first?)"
+    [[ -d "$REPO_DIR/cache" ]] \
+        || die "no cache/ to push at $REPO_DIR/cache (run prepare on host first)"
+    log "rsyncing $REPO_DIR/cache/ → tester@127.0.0.1:DevVMSetup/cache/"
+    rsync -avh --progress \
+        -e "ssh ${ssh_opts[*]}" \
+        "$REPO_DIR/cache/" "tester@127.0.0.1:DevVMSetup/cache/"
+    ok "pushed cache to VM"
+}
+
 cmd_sync() {
     vm_running || die "VM is not running (did you run 'up' or 'boot' first?)"
     sync_repo
@@ -420,10 +447,12 @@ cmd_clean() {
 
 # ---------------------------------------------------------------------------
 case "$COMMAND" in
-    up)       cmd_up ;;
-    boot)     cmd_boot ;;
-    ssh)      cmd_ssh ;;
-    sync)     cmd_sync ;;
+    up)         cmd_up ;;
+    boot)       cmd_boot ;;
+    ssh)        cmd_ssh ;;
+    sync)       cmd_sync ;;
+    pull-cache) cmd_pull_cache ;;
+    push-cache) cmd_push_cache ;;
     console)  cmd_console ;;
     status)   cmd_status ;;
     destroy)  cmd_destroy ;;

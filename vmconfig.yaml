@@ -270,12 +270,12 @@ pipx:
     - volatility3               # vol -f mem.raw windows.info
     - yara                      # yara rules.yar ./sample
     - impacket                  # impacket-secretsdump user@host
-    - enum4linux-ng             # enum4linux-ng -A 10.0.0.1
     - pipreqs                   # pipreqs ./project    (reqs.txt from imports)
 
-    # NetExec (CrackMapExec's maintained fork) is not on PyPI; install
-    # directly from the git repo (pipx accepts git+URL specs).
-    - git+https://github.com/Pennyw0rth/NetExec.git  # nxc smb 10.0.0.0/24
+    # Packages that aren't on PyPI — installed from their git repos.
+    # pipx accepts git+URL specs directly.
+    - git+https://github.com/Pennyw0rth/NetExec.git        # nxc smb 10.0.0.0/24
+    - git+https://github.com/cddmp/enum4linux-ng.git       # enum4linux-ng -A 10.0.0.1
 
 pip_system:
   # Python libraries importable from any `python3` REPL. Installed with
@@ -542,7 +542,6 @@ git_sources:
 
   - url: https://github.com/sullo/nikto          # nikto -h https://target
     dest: ~/src/nikto
-    branch: master
     skip_if_command: nikto
     post_install:
       - sudo ln -sf "$PWD/program/nikto.pl" /usr/local/bin/nikto

@@ -225,12 +225,16 @@ def _install_repos(repos: list[dict], ctx) -> None:
                 log.warning("key for %s not cached; fetching now", name)
                 http_download(repo["key_url"], key_cached)
 
-        keyring = KEYRING_DIR / f"{name}.gpg"
-        # dearmor via gpg
+        # Install the ASCII-armored key directly. apt accepts both .gpg
+        # (binary) and .asc (armored) files in `signed-by=…` so long as
+        # the filename suffix matches the format. Skipping the dearmor
+        # step means prepare doesn't need the `gpg` binary on PATH,
+        # which in turn means `python3 setup.py --mode prepare` runs on
+        # a host where only `bootstrap.sh prepare` has been done (debs
+        # cached but not yet installed).
+        keyring = KEYRING_DIR / f"{name}.asc"
         ctx.run(
-            ["bash", "-c",
-             f"gpg --dearmor < {key_cached} > /tmp/{name}.gpg && "
-             f"install -m 0644 /tmp/{name}.gpg {keyring} && rm /tmp/{name}.gpg"],
+            ["install", "-m", "0644", str(key_cached), str(keyring)],
             sudo=True,
         )
 

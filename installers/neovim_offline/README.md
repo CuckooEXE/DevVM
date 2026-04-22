@@ -46,6 +46,13 @@ python3 setup.py --mode prepare --only neovim_offline   # stage into cache
 python3 setup.py --mode install --only neovim_offline   # deploy to $HOME
 ```
 
+Prepare needs a few things on `PATH` before `stage.sh` runs: a C
+toolchain (for treesitter parser compilation), `unzip`, `python3-venv`
+(Mason's pypi installer), `golang-go` + `libc6-dev` (Mason's golang
+installer uses cgo). All of these are in `bootstrap.sh`'s
+`REQUIRED_APT`, so running `./bootstrap.sh full` before
+`setup.py --mode prepare` covers them.
+
 Install deploys into the invoking user's `$HOME`:
 
 - `~/.local/share/nvim-runtime/` — Neovim runtime
@@ -57,13 +64,17 @@ Install deploys into the invoking user's `$HOME`:
 
 ## Running the scripts by hand
 
-Both scripts honour the `BUNDLE_DIR` env var. By default they find the
-repo root (via `setup.py` + `vmconfig.yaml`) and use
-`$repo_root/cache/neovim_offline`. Override it to ship a portable
-self-contained bundle:
+Both scripts honour the `BUNDLE_DIR` env var. Resolution order:
+
+1. explicit `BUNDLE_DIR=...` (what `installers/neovim_offline/__init__.py`
+   sets when `setup.py` drives the scripts).
+2. else walk up from the script dir looking for `setup.py` +
+   `vmconfig.yaml`, and use `$repo_root/cache/neovim_offline`.
+3. else fall back to the script's own directory (for a self-contained,
+   portable bundle that doesn't live inside a DevVMSetup repo).
 
 ```bash
-BUNDLE_DIR=/tmp/nvim-bundle ./stage.sh            # full stage into tmp
+BUNDLE_DIR=/tmp/nvim-bundle ./stage.sh            # stage into tmp
 BUNDLE_DIR=/media/usb/nvim  ./install.sh --force  # deploy from USB
 ```
 

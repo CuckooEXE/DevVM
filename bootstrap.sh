@@ -26,17 +26,22 @@ REQUIRED_APT=(
     python3-yaml
     python3-jsonschema
     python3-pip         # pipx/pip_system prepare use pip to pre-download wheels
+    python3-venv        # mason's pypi installer runs `python3 -m venv`
     # TLS / signing / network
     ca-certificates
     curl
     gnupg
     # git_sources prepare uses `git clone --mirror`
     git
-    # neovim_offline prepare runs stage.sh which wants these before apt's
-    # install phase has run:
+    # neovim_offline prepare runs stage.sh before apt.install; it wants a C
+    # toolchain (gcc + libc headers so cgo can compile Go packages that pull
+    # in runtime/cgo), unzip for archives, make, and a Go toolchain so
+    # Mason can `go install` gopls/delve/goimports.
     unzip
     gcc
     make
+    libc6-dev
+    golang-go
 )
 
 command -v sudo >/dev/null 2>&1 || {

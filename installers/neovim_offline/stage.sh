@@ -255,6 +255,60 @@ if not refreshed then
   vim.cmd("cq 1")
 end
 
+-- Per-package diagnostics: track state + a rolling tail of stdout/stderr
+-- so we can report which packages are actually stuck and what their
+-- installer is saying. Populated by event listeners on each install
+-- handle (defensive: listener API varies between mason versions).
+local diag = {}   -- name -> { state = "queued"|..., tail = {...}, done = bool }
+local TAIL_MAX = 20
+
+local function diag_state(name)
+  return (diag[name] or {}).state or "?"
+end
+
+local function push_tail(name, line)
+  local d = diag[name] or { state = "?", tail = {}, done = false }
+  if #d.tail >= TAIL_MAX then table.remove(d.tail, 1) end
+  table.insert(d.tail, line)
+  diag[name] = d
+end
+
+-- Subscribe to every event we can, best-effort. mason-core's handles
+-- have historically exposed `:on(event, cb)` for `state:change`,
+-- `stdout`, `stderr`, and `closed`. Older versions may not have all of
+-- them, so every hookup is wrapped in pcall.
+local function hook_handle(name, h)
+  if type(h) ~= "table" or type(h.on) ~= "function" then return end
+  pcall(function()
+    h:on("state:change", function(...)
+      local args = {...}
+      -- The signature varies (old/new or just new); take the last arg.
+      local new = tostring(args[#args] or "")
+      diag[name].state = new
+      print(string.format("  [%-40s] state → %s", name, new))
+    end)
+  end)
+  local function sink(label)
+    return function(data)
+      if type(data) ~= "string" then data = tostring(data) end
+      for line in data:gmatch("[^\n]+") do
+        push_tail(name, label .. ": " .. line)
+        -- Echo live too; extremely verbose but useful for hangs.
+        print(string.format("  [%-40s] %s: %s", name, label, line))
+      end
+    end
+  end
+  pcall(function() h:on("stdout", sink("out")) end)
+  pcall(function() h:on("stderr", sink("err")) end)
+  pcall(function()
+    h:on("closed", function()
+      diag[name].done = true
+      diag[name].state = "closed"
+      print(string.format("  [%-40s] closed", name))
+    end)
+  end)
+end
+
 -- Kick off installs. With LazyVim out of the picture, we are the only
 -- caller of pkg:install(), so no race to worry about.
 local handles = {}
@@ -268,24 +322,39 @@ for _, name in ipairs(pkgs) do
     -- Possible if a stale install from a previous (crashed) run survived
     -- in mason's state. Let it finish rather than restarting it.
     print("skip (already installing from earlier run): " .. name)
+    diag[name] = { state = "already_installing", tail = {}, done = false }
   else
     print("installing: " .. name)
-    handles[name] = pkg:install()
+    local h = pkg:install()
+    handles[name] = h
+    diag[name] = { state = "queued", tail = {}, done = false }
+    hook_handle(name, h)
   end
 end
 
--- Wait up to 30 minutes for every handle to settle.
+-- Wait up to 30 minutes for every handle to settle. Report every 15 s
+-- with per-package detail — name, current state, last few output lines
+-- — so hung installs are immediately visible.
 local deadline = vim.loop.now() + 30 * 60 * 1000
 local last_report = 0
 while vim.loop.now() < deadline do
-  local pending_count = 0
+  local pending = {}
   for _, name in ipairs(pkgs) do
     local ok, pkg = pcall(registry.get_package, name)
-    if ok and not pkg:is_installed() then pending_count = pending_count + 1 end
+    if ok and not pkg:is_installed() then table.insert(pending, name) end
   end
-  if pending_count == 0 then break end
+  if #pending == 0 then break end
   if vim.loop.now() - last_report > 15000 then
-    print(string.format("  ... %d/%d still pending", pending_count, #pkgs))
+    print(string.format("  ... %d/%d still pending:", #pending, #pkgs))
+    for _, name in ipairs(pending) do
+      local d = diag[name] or {}
+      print(string.format("    - %-40s state=%s", name, diag_state(name)))
+      local tail = d.tail or {}
+      local start = math.max(1, #tail - 4)
+      for i = start, #tail do
+        print(string.format("        │ %s", tail[i]))
+      end
+    end
     last_report = vim.loop.now()
   end
   vim.wait(2000)

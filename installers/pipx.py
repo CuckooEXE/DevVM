@@ -61,19 +61,21 @@ def prepare(section: dict, ctx) -> None:
 
     # 2) Cache wheels for each pipx package. PyPI specs -> `pip download`;
     #    git+URL specs -> `pip wheel` (builds a wheel locally from the repo).
+    #
+    # For git+URL specs we intentionally DON'T pass --no-deps: we want
+    # every runtime dep pulled into the cache as a wheel too, so the
+    # install phase can install the pre-built wheel fully offline.
+    # (PEP 517 *build* dependencies like poetry-core and
+    # poetry-dynamic-versioning get fetched on the fly from PyPI while
+    # `pip wheel` is running here — they're ephemeral, used only to
+    # produce the .whl. They don't need to end up in the cache because
+    # install time installs the already-built .whl directly.)
     for pkg in packages:
         is_git = pkg.startswith(("git+", "git://"))
         log.info("pipx: caching %s %s", "(git build)" if is_git else "(download)",
                  pkg)
         if is_git:
-            ctx.run([pip, "wheel", "--wheel-dir", str(cache),
-                     "--no-deps", pkg])
-            # pip wheel for git+URL only builds the top package; its runtime
-            # deps still need downloading. `pip download` the same spec with
-            # deps-only semantics via --no-build-isolation+no-binary probably
-            # won't resolve cleanly, so we rely on `pip install`'s resolver
-            # later. Best-effort: try to download the wheel's declared
-            # dependencies at install time instead.
+            ctx.run([pip, "wheel", "--wheel-dir", str(cache), pkg])
         else:
             ctx.run([pip, "download", "--dest", str(cache), pkg])
 
@@ -108,14 +110,49 @@ def install(section: dict, ctx) -> None:
         if pkg_name in installed:
             log.info("pipx %s already installed (venv=%s)", pkg, pkg_name)
             continue
-        log.info("pipx install %s", pkg)
+
+        # For git+URL specs, install the wheel we pre-built in prepare
+        # rather than re-running the source build. Going through the
+        # git+URL again would trigger pip's PEP 517 build isolation,
+        # which reaches out to PyPI for the package's build-system
+        # deps (poetry-core, setuptools-scm, etc.) — those aren't in our
+        # wheel cache, so --no-index would make it fail.
+        pkg_arg = pkg
+        if use_cache and pkg.startswith(("git+", "git://")):
+            prebuilt = _find_prebuilt_wheel(cache, pkg)
+            if prebuilt:
+                log.info("pipx: using prebuilt wheel %s for %s",
+                         prebuilt.name, pkg)
+                pkg_arg = str(prebuilt)
+            else:
+                log.warning("pipx: no prebuilt wheel for %s in %s; "
+                            "falling back to source install (may fail offline)",
+                            pkg, cache)
+
+        log.info("pipx install %s", pkg_arg)
         cmd = [_pipx_bin(), "install"]
         if pip_args:
             cmd += [f"--pip-args={pip_args}"]
-        cmd.append(pkg)
+        cmd.append(pkg_arg)
         ctx.run(cmd)
 
     ctx.run([_pipx_bin(), "ensurepath"])
+
+
+def _find_prebuilt_wheel(cache: Path, pkg_spec: str) -> Path | None:
+    """Locate a cached wheel built from the given pipx spec.
+
+    `pip wheel` writes files as `<dist_name>-<version>-<py>-<abi>-<plat>.whl`
+    where the dist name is the lowercased PEP 503 name with hyphens
+    replaced by underscores. We match both variants (with hyphens and
+    with underscores) to be forgiving across naming styles.
+    """
+    stem = _venv_name_for(pkg_spec)
+    for pat in (f"{stem}-*.whl", f"{stem.replace('-', '_')}-*.whl"):
+        matches = sorted(cache.glob(pat))
+        if matches:
+            return matches[-1]  # newest (lexical sort approximates version)
+    return None
 
 
 def _pre_seed_shared_libs(cache: Path, ctx) -> None:

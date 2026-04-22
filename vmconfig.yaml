@@ -692,7 +692,6 @@ docs:
     # ── Build / infra tooling ───────────────────────────────────────
     - CMake
     - Docker
-    - Git
     - Vim
 
     # ── Quick-lookup references ─────────────────────────────────────

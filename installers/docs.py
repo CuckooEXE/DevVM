@@ -60,4 +60,13 @@ def install(section: dict, ctx) -> None:
             log.info("docset %s already installed", name)
             continue
         log.info("extracting docset %s", name)
-        extract(archive, zeal_dir, strip_components=0)
+        # Kapeli's mirror occasionally serves a 404 HTML page under a
+        # .tgz filename for docsets that don't exist. The cached file
+        # isn't a real tar, so tarfile.open raises ReadError. Don't
+        # abort the rest of the docs install — just warn and move on.
+        try:
+            extract(archive, zeal_dir, strip_components=0)
+        except Exception as e:
+            log.warning("docset %s: extract failed (%s); "
+                        "remove it from vmconfig.yaml's zeal_docsets if the "
+                        "docset doesn't exist upstream", name, e)

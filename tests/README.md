@@ -86,8 +86,8 @@ atuin --version && lazygit --version && starship --version
 # pipx-installed tools
 pipx list | head
 
-# VSCode + extensions
-code --list-extensions | wc -l   # should be ~34
+# VSCodium + extensions
+codium --list-extensions | wc -l   # should be ~22
 
 # Docker images pulled (incl. locally-built binwalk)
 docker image ls

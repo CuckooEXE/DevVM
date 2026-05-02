@@ -185,7 +185,7 @@
       }
     },
 
-    "vscode_extensions": {
+    "codium_extensions": {
       "type": "object",
       "additionalProperties": false,
       "properties": {

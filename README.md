@@ -13,7 +13,7 @@ python3 setup.py --mode full      # install everything declared in vmconfig.yaml
 
 That's it. `vmconfig.yaml` is the single source of truth — apt packages,
 pipx/pip libs, GitHub-release binaries, tarballs, rustup, git clones,
-docker images, zeal docsets, fonts, VSCode extensions, and the offline
+docker images, zeal docsets, fonts, Codium extensions, and the offline
 LazyVim bundle are all declared there. Each section's inline comments
 show a usage example per entry.
 
@@ -36,8 +36,8 @@ python3 setup.py --mode install   # installs from cache (no network)
 
 Every installer honours the offline contract: apt downloads the whole
 transitive `.deb` closure, pipx builds wheels locally, rustup stages a
-full `~/.rustup` tree into the cache, VSCode extensions pre-fetch
-`.vsix` bundles from the Marketplace API, the LazyVim bundle pre-clones
+full `~/.rustup` tree into the cache, Codium extensions pre-fetch
+`.vsix` bundles from Open VSX, the LazyVim bundle pre-clones
 every plugin and pre-installs every Mason server. See `vmconfig.yaml`
 section-by-section for details.
 
@@ -56,7 +56,7 @@ flag and subcommand lists.
 | `-v`                      | verbose logging                                                          |
 
 Section names: `apt`, `pipx`, `pip_system`, `github_releases`, `tarballs`,
-`rustup`, `git_sources`, `docker`, `docs`, `fonts`, `vscode_extensions`,
+`rustup`, `git_sources`, `docker`, `docs`, `fonts`, `codium_extensions`,
 `neovim_offline`.
 
 ## Repo layout
@@ -72,6 +72,9 @@ Section names: `apt`, `pipx`, `pip_system`, `github_releases`, `tarballs`,
 - `installers/` — one module per section. `installers/neovim_offline/`
   is a package containing the LazyVim bundle's source + deploy scripts.
 - `post/` — shell hooks run after installers, lexical order.
+- `bin/` — user-facing scripts deployed onto the VM's `$PATH` via post
+  hooks. Currently: `vm-manager.sh` (libvirt + cloud-init wrapper for
+  spinning up nested dev/test VMs) → `/usr/local/bin/vm-manager`.
 - `cache/` — populated by `prepare`, consumed by `install`. Gitignored.
 - `tests/run-vm.sh` — end-to-end test harness. See `tests/README.md`.
 

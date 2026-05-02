@@ -33,7 +33,7 @@
 #   docker             container images (docker pull + save to cache)
 #   docs               man-db/info rebuilds + zeal docsets
 #   fonts              system-wide font archives
-#   vscode_extensions  VSCode marketplace bundles
+#   codium_extensions  Open VSX bundles for VSCodium
 #   neovim_offline     LazyVim bundle (see installers/neovim_offline/README.md)
 
 apt:
@@ -47,12 +47,12 @@ apt:
       components: [stable]
       key_url: https://download.docker.com/linux/debian/gpg
 
-    - name: vscode
-      uri: https://packages.microsoft.com/repos/code
-      suite: stable
+    - name: vscodium
+      uri: https://download.vscodium.com/debs
+      suite: vscodium
       components: [main]
       arch: amd64
-      key_url: https://packages.microsoft.com/keys/microsoft.asc
+      key_url: https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg
 
   # apt packages. Transitive deps pull in automatically — you only list
   # the headline packages. Inline comments are quick usage hints.
@@ -226,7 +226,7 @@ apt:
     - zstd                      # zstd -19 file
     - ca-certificates           # /etc/ssl/certs, updated by apt
     - gnupg                     # gpg --verify file.sig file
-    - apt-transport-https       # HTTPS transport for apt (Microsoft repo)
+    - apt-transport-https       # HTTPS transport for apt (VSCodium repo)
     - fontconfig                # fc-cache -f <dir>  (drives the fonts section)
 
     # ── Docker engine (from the docker repo above) ───────────────────
@@ -236,11 +236,24 @@ apt:
     - docker-buildx-plugin      # docker buildx build --platform linux/arm64 .
     - docker-compose-plugin     # docker compose up -d
 
-    # ── Editor (from the vscode repo above) ──────────────────────────
-    # The .deb postinst asks whether to install the Microsoft apt repo;
-    # we already added it declaratively, so installers/apt.py preseeds
-    # `code/add-microsoft-repo boolean false` to suppress the prompt.
-    - code                      # code <dir>
+    # ── Virtualization (libvirt + cloud-init tooling) ────────────────
+    # Backs bin/vm-manager.sh: libvirt for VM lifecycle, virtinst for
+    # `virt-install`/`virt-clone`, cloud-image-utils for cloud-localds
+    # (builds cloud-init seed ISOs), and the network/ISO build deps
+    # libvirt-daemon-system would otherwise pull via Recommends.
+    - libvirt-daemon-system     # libvirtd + default NAT network/pool
+    - libvirt-clients           # virsh
+    - virtinst                  # virt-install <name> --import; virt-clone
+    - cloud-image-utils         # cloud-localds seed.iso user-data meta-data
+    - bridge-utils              # libvirt bridge networking (brctl)
+    - dnsmasq-base              # libvirt's NAT DHCP/DNS for the default net
+    - genisoimage               # ISO 9660 builder used by cloud-localds
+
+    # ── Editor (from the vscodium repo above) ────────────────────────
+    # VSCodium = VSCode without Microsoft branding/telemetry, configured
+    # against Open VSX (https://open-vsx.org) instead of the Microsoft
+    # marketplace. The `codium` postinst asks no debconf questions.
+    - codium                    # codium <dir>
 
     # ── Offline doc viewer ───────────────────────────────────────────
     - zeal                      # zeal  (GUI for the docs.zeal_docsets below)
@@ -712,26 +725,29 @@ fonts:
     install_dir: /usr/share/fonts/truetype/jetbrains-mono-nerd
     extract_pattern: "*.ttf"
 
-vscode_extensions:
-  # Installed via `code --install-extension` as the invoking user. The
-  # prepare step queries the Marketplace gallery API for latest
-  # versions and caches the .vsix bundles under cache/vscode/.
+codium_extensions:
+  # Installed via `codium --install-extension` as the invoking user. The
+  # prepare step queries the Open VSX REST API for latest versions and
+  # caches the .vsix bundles under cache/codium/.
+  #
+  # Several Microsoft-published extensions are *not* listed here even
+  # though they appear on Open VSX, because they are license-locked at
+  # runtime and refuse to load on non-Microsoft builds (Pylance, the
+  # cpptools family, all ms-vscode-remote.*, ms-dotnettools.csharp,
+  # ms-vscode.hexeditor). Replacements below: pyright for Pylance,
+  # vscode-clangd for cpptools, jeanp413.open-remote-ssh for remote-ssh.
   extensions:
     # ── Python ──────────────────────────────────────────────────────
     - ms-python.python
-    - ms-python.vscode-pylance
     - ms-python.debugpy
     - ms-python.black-formatter
+    - ms-pyright.pyright          # OSS Pyright LSP (Pylance replacement)
     - ms-toolsai.jupyter
     - njpwerner.autodocstring
     - donjayamanne.python-extension-pack
 
     # ── C / C++ / CMake / Make ──────────────────────────────────────
-    - ms-vscode.cpptools
-    - ms-vscode.cpptools-themes
-    - ms-vscode.cpptools-extension-pack
-    - ms-vscode.cmake-tools
-    - ms-vscode.makefile-tools
+    - llvm-vs-code-extensions.vscode-clangd   # clangd LSP (cpptools replacement)
     - xaver.clang-format
     - twxs.cmake
     - cschlosser.doxdocgen
@@ -740,17 +756,12 @@ vscode_extensions:
     - ziglang.vscode-zig
     - rust-lang.rust-analyzer
     - redhat.java
-    - ms-dotnettools.csharp
     - vadimcn.vscode-lldb
 
     # ── Remote dev ──────────────────────────────────────────────────
-    - ms-vscode-remote.remote-wsl
-    - ms-vscode-remote.remote-containers
-    - ms-vscode-remote.remote-ssh
-    - ms-vscode-remote.remote-ssh-edit
-    - ms-vscode-remote.vscode-remote-extensionpack
-    - ms-vscode.remote-explorer
-    - ms-vscode.remote-server
+    # Microsoft's Remote-* extension pack is locked to MS builds.
+    # open-remote-ssh is the OSS fork that works on VSCodium.
+    - jeanp413.open-remote-ssh
     - ms-azuretools.vscode-docker
 
     # ── Formats / misc ──────────────────────────────────────────────
@@ -758,7 +769,6 @@ vscode_extensions:
     - esbenp.prettier-vscode
     - yzhang.markdown-all-in-one
     - DavidAnson.vscode-markdownlint
-    - ms-vscode.hexeditor
     - dracula-theme.theme-dracula
 
 neovim_offline:

@@ -236,6 +236,19 @@ apt:
     - docker-buildx-plugin      # docker buildx build --platform linux/arm64 .
     - docker-compose-plugin     # docker compose up -d
 
+    # ── Virtualization (libvirt + cloud-init tooling) ────────────────
+    # Backs bin/vm-manager.sh: libvirt for VM lifecycle, virtinst for
+    # `virt-install`/`virt-clone`, cloud-image-utils for cloud-localds
+    # (builds cloud-init seed ISOs), and the network/ISO build deps
+    # libvirt-daemon-system would otherwise pull via Recommends.
+    - libvirt-daemon-system     # libvirtd + default NAT network/pool
+    - libvirt-clients           # virsh
+    - virtinst                  # virt-install <name> --import; virt-clone
+    - cloud-image-utils         # cloud-localds seed.iso user-data meta-data
+    - bridge-utils              # libvirt bridge networking (brctl)
+    - dnsmasq-base              # libvirt's NAT DHCP/DNS for the default net
+    - genisoimage               # ISO 9660 builder used by cloud-localds
+
     # ── Editor (from the vscodium repo above) ────────────────────────
     # VSCodium = VSCode without Microsoft branding/telemetry, configured
     # against Open VSX (https://open-vsx.org) instead of the Microsoft

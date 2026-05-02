@@ -72,6 +72,9 @@ Section names: `apt`, `pipx`, `pip_system`, `github_releases`, `tarballs`,
 - `installers/` — one module per section. `installers/neovim_offline/`
   is a package containing the LazyVim bundle's source + deploy scripts.
 - `post/` — shell hooks run after installers, lexical order.
+- `bin/` — user-facing scripts deployed onto the VM's `$PATH` via post
+  hooks. Currently: `vm-manager.sh` (libvirt + cloud-init wrapper for
+  spinning up nested dev/test VMs) → `/usr/local/bin/vm-manager`.
 - `cache/` — populated by `prepare`, consumed by `install`. Gitignored.
 - `tests/run-vm.sh` — end-to-end test harness. See `tests/README.md`.
 

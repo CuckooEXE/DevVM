@@ -34,7 +34,6 @@
 #   docs               man-db/info rebuilds + zeal docsets
 #   fonts              system-wide font archives
 #   codium_extensions  Open VSX bundles for VSCodium
-#   neovim_offline     LazyVim bundle (see installers/neovim_offline/README.md)
 
 apt:
   # 3rd-party apt repos. The `key_url` GPG key is fetched during prepare
@@ -54,6 +53,16 @@ apt:
       arch: amd64
       key_url: https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg
 
+    - name: claude-code
+      # Anthropic's signed apt repo. `stable` trails ~1 week behind
+      # `latest` and skips releases with major regressions. The package
+      # ships a native binary (no Node at runtime); apt-managed installs
+      # don't auto-update — they move with `apt upgrade`.
+      uri: https://downloads.claude.ai/claude-code/apt/stable
+      suite: stable
+      components: [main]
+      key_url: https://downloads.claude.ai/keys/claude-code.asc
+
   # apt packages. Transitive deps pull in automatically — you only list
   # the headline packages. Inline comments are quick usage hints.
   packages:
@@ -67,6 +76,7 @@ apt:
     - clang-tools               # clangd (LSP), scan-build
     - clang-tidy                # clang-tidy src/*.cpp --checks='*'
     - clang-format              # clang-format -i src/*.cpp
+    - cppcheck                  # cppcheck --enable=all src/  (C/C++ static analysis)
     - lld                       # clang -fuse-ld=lld
     - lldb                      # lldb ./a.out
     - gdb                       # gdb ./a.out
@@ -90,6 +100,8 @@ apt:
     - default-jdk               # javac Hello.java && java Hello
     - maven                     # mvn package
     - gradle                    # gradle build
+    - nodejs                    # node script.js
+    - npm                       # npm install -g <pkg>
 
     # ── Reverse engineering / binary analysis ────────────────────────
     # Rizin (radare2 fork), Cutter, keystone, and honggfuzz are built
@@ -125,6 +137,26 @@ apt:
     - checksec                  # checksec --file=./bin
     - libcapstone-dev           # libs + headers for capstone (disassembler)
     - capstone-tool             # cstool x64 "48 83 ec 08"
+
+    # ── Windows / .NET binary interop ────────────────────────────────
+    # Run PE tooling and triage Windows targets without a Windows box.
+    - wine                      # wine sample.exe
+    - wine64                    # 64-bit PE support
+    - mono-complete             # mono app.exe   (.NET Framework assemblies)
+
+    # ── Mobile (Android) ─────────────────────────────────────────────
+    # apktool (above) rebuilds APKs; jadx/dex2jar (tarballs) turn dex
+    # into readable Java; adb drives a device or emulator.
+    - adb                       # adb shell; adb pull /data/data/<pkg>
+
+    # ── Kernel exploitation / rootfs building ────────────────────────
+    # LPE work: build modules against the running headers, triage crash
+    # dumps, and assemble a minimal initramfs/rootfs to boot a target
+    # kernel under the qemu-system-* emulators above.
+    - linux-headers-amd64       # module builds; /lib/modules/$(uname -r)/build
+    - crash                     # crash vmlinux vmcore   (kernel dump analysis)
+    - busybox-static            # static /bin for a hand-rolled initramfs
+    - debootstrap               # debootstrap trixie ./rootfs   (build a rootfs)
 
     # ── Fuzzing ──────────────────────────────────────────────────────
     # honggfuzz is built from git_sources below and uses libbfd-dev +
@@ -178,6 +210,7 @@ apt:
     - foremost                  # foremost -t all -i disk.img -o out
     - scalpel                   # scalpel -c scalpel.conf -o out disk.img
     - libimage-exiftool-perl    # exiftool photo.jpg
+    - sqlitebrowser             # sqlitebrowser app.db   (browse SQLite/WAL)
 
     # ── Observability / kernel tracing ───────────────────────────────
     - bpftrace                  # bpftrace -e 'tracepoint:syscalls:sys_enter_openat { ... }'
@@ -249,11 +282,37 @@ apt:
     - dnsmasq-base              # libvirt's NAT DHCP/DNS for the default net
     - genisoimage               # ISO 9660 builder used by cloud-localds
 
+    # ── Web admin console (Cockpit) ──────────────────────────────────
+    # Browser server console on https://<host>:9090 (socket-activated by
+    # post/62-cockpit.sh). cockpit-machines drives the libvirt stack above
+    # from the browser. NB: this is a *management* console, not a full
+    # graphical-desktop stream — see the summary for the noVNC option.
+    - cockpit                   # metapackage: cockpit-ws + bridge + system
+    - cockpit-machines          # manage libvirt VMs from the web UI
+    - cockpit-storaged          # disks / LVM / filesystems
+    - cockpit-networkmanager    # interfaces / bridges / firewall
+
+    # ── Browser remote desktop (noVNC stack) ─────────────────────────
+    # Use the live XFCE (X11) desktop from a browser tab — no Docker, no
+    # Java. x11vnc shares the real :0 session over VNC; websockify bridges
+    # WebSocket<->TCP and serves the noVNC HTML5 client. Data path:
+    #   browser (noVNC) --ws--> websockify --tcp/RFB--> x11vnc --> :0
+    # post/64-novnc.sh installs x11vnc.service + novnc.service (systemd)
+    # so it survives reboot. Browse to http://<host>:6080/vnc.html.
+    - x11vnc                    # x11vnc -display :0 -auth guess -localhost -loop
+    - websockify                # websockify --web /usr/share/novnc 6080 localhost:5900
+    - novnc                     # HTML5 VNC client at /usr/share/novnc/vnc.html
+
     # ── Editor (from the vscodium repo above) ────────────────────────
     # VSCodium = VSCode without Microsoft branding/telemetry, configured
     # against Open VSX (https://open-vsx.org) instead of the Microsoft
     # marketplace. The `codium` postinst asks no debconf questions.
     - codium                    # codium <dir>
+
+    # ── AI coding agent (from the claude-code repo above) ────────────
+    # Anthropic's CLI, native binary via the signed apt repo. opencode
+    # (github_releases) is the other agent installed on the VM.
+    - claude-code               # claude    (needs a Pro/Max/Console login)
 
     # ── Offline doc viewer ───────────────────────────────────────────
     - zeal                      # zeal  (GUI for the docs.zeal_docsets below)
@@ -272,6 +331,7 @@ pipx:
     - mypy                      # mypy src/
     - uv                        # uv pip install foo   (fast pip replacement)
     - httpie                    # http GET example.com
+    - semgrep                   # semgrep --config auto src/   (multi-lang SAST)
 
     # ── RE / vuln research / pentest CLIs ────────────────────────────
     - ropper                    # ropper --file ./bin --search 'pop rdi'
@@ -284,6 +344,8 @@ pipx:
     - yara                      # yara rules.yar ./sample
     - impacket                  # impacket-secretsdump user@host
     - pipreqs                   # pipreqs ./project    (reqs.txt from imports)
+    - uncompyle6                # uncompyle6 mod.pyc   (Python 2.x–3.8 bytecode)
+    - decompyle3                # decompyle3 mod.pyc   (Python 3.7–3.9 bytecode)
 
     # Packages that aren't on PyPI — installed from their git repos.
     # pipx accepts git+URL specs directly.
@@ -306,6 +368,7 @@ pip_system:
     - z3-solver                 # from z3 import *
     - yara-python               # import yara; yara.compile(...)
     - frida                     # import frida
+    - miasm                     # from miasm.analysis.machine import Machine  (RE/SE framework)
 
     # ── Network / web research ───────────────────────────────────────
     - scapy                     # from scapy.all import *
@@ -375,6 +438,16 @@ github_releases:
     strip_components: 1
     bin:
       - {src: atuin, dest: /usr/local/bin/atuin}
+
+  # ── AI coding agent ───────────────────────────────────────────────
+  # opencode ships a self-contained binary (Bun-compiled, no Node at
+  # runtime), so unlike the npm-only `pi` it caches + installs offline
+  # like every other github_releases tool. The x64\.tar\.gz anchor keeps
+  # it off the -baseline / -musl variants.
+  - repo: anomalyco/opencode              # opencode  (open-source AI agent)
+    asset_regex: 'opencode-linux-x64\.tar\.gz$'
+    bin:
+      - {src: opencode, dest: /usr/local/bin/opencode}
 
   # ── Recon / web testing (ProjectDiscovery suite + friends) ────────
   - repo: projectdiscovery/nuclei         # nuclei -u https://t -t cves/
@@ -454,6 +527,23 @@ github_releases:
     bin:
       - {src: 'Cutter-*.AppImage', dest: /usr/local/bin/cutter}
 
+  # imhex — hex editor / binary-format workbench (Kaitai-ish pattern
+  # language). Ships an AppImage like Cutter; libfuse2t64 (apt) supplies
+  # the FUSE2 the AppImage needs to mount itself. The trailing $ anchor
+  # keeps it off the .AppImage.zsync / arm64 assets.
+  - repo: WerWolv/ImHex                   # imhex <binary>
+    asset_regex: 'imhex-.*-x86_64\.AppImage$'
+    bin:
+      - {src: 'imhex-*-x86_64.AppImage', dest: /usr/local/bin/imhex}
+
+  # bindiff — Google's binary diffing engine (N-day/patch analysis; plugs
+  # into Ghidra). Upstream ships ONLY a .deb — no tarball — so there are
+  # no `bin:` entries here: this stanza exists purely to cache the .deb
+  # under cache/github/ during prepare. post/60-github-debs.sh dpkg-installs
+  # it offline at the end of the install phase.
+  - repo: google/bindiff                  # bindiff  (also: Ghidra BinDiff plugin)
+    asset_regex: 'bindiff_.*_amd64\.deb$'
+
 tarballs:
   # Generic URL tarballs. `resolve: zig-index` reads ziglang.org's JSON
   # index; `resolve: github-release` uses the GitHub API like
@@ -465,6 +555,18 @@ tarballs:
     symlinks:
       - {src: /opt/zig/current/zig, dest: /usr/local/bin/zig}
 
+  - name: go                              # go version
+    # `resolve: go-dl` reads go.dev's release index (mode=json returns the
+    # current stable majors, newest first) and picks the linux/amd64
+    # archive. The tarball unpacks to a top-level go/ dir; the default
+    # strip_components=1 drops it so /opt/go/current is a GOROOT.
+    resolve: go-dl
+    url: https://go.dev/dl/?mode=json
+    install_dir: /opt/go
+    symlinks:
+      - {src: /opt/go/current/bin/go, dest: /usr/local/bin/go}
+      - {src: /opt/go/current/bin/gofmt, dest: /usr/local/bin/gofmt}
+
   - name: ghidra                          # ghidraRun
     resolve: github-release
     url: NationalSecurityAgency/ghidra
@@ -472,6 +574,47 @@ tarballs:
     install_dir: /opt/ghidra
     symlinks:
       - {src: /opt/ghidra/current/ghidraRun, dest: /usr/local/bin/ghidraRun}
+
+  # jadx — dex→Java decompiler. The main jadx-<ver>.zip carries both the
+  # CLI (bin/jadx) and the GUI (bin/jadx-gui); the *-gui-*-win.zip assets
+  # are Windows-only, so the '-\d' after 'jadx' keeps the regex on the
+  # portable archive. The zip has bin/ and lib/ at its root (no wrapping
+  # dir), so strip_components must be 0. Both launchers need the JRE from
+  # default-jdk (apt).
+  - name: jadx
+    resolve: github-release
+    url: skylot/jadx
+    asset_regex: 'jadx-\d.*\.zip$'
+    install_dir: /opt/jadx
+    strip_components: 0
+    symlinks:
+      - {src: /opt/jadx/current/bin/jadx, dest: /usr/local/bin/jadx}
+      - {src: /opt/jadx/current/bin/jadx-gui, dest: /usr/local/bin/jadx-gui}
+
+  # dex2jar — convert .dex/.apk to a .jar for JVM decompilers. The
+  # dex-tools-v<ver>.zip unpacks under a top-level dex-tools-v<ver>/ dir,
+  # which the default strip_components=1 drops.
+  - name: dex2jar
+    resolve: github-release
+    url: pxb1988/dex2jar
+    asset_regex: 'dex-tools-.*\.zip$'
+    install_dir: /opt/dex2jar
+    symlinks:
+      - {src: /opt/dex2jar/current/d2j-dex2jar.sh, dest: /usr/local/bin/d2j-dex2jar}
+      - {src: /opt/dex2jar/current/d2j-jar2dex.sh, dest: /usr/local/bin/d2j-jar2dex}
+
+  # codeql — GitHub's semantic code-analysis CLI (write .ql queries over a
+  # built database). codeql-linux64.zip unpacks under a top-level codeql/
+  # dir that the default strip_components=1 drops, leaving the launcher at
+  # the versioned root. Query packs live in a separate repo (github/codeql)
+  # — clone that via git_sources if you want the standard libraries offline.
+  - name: codeql
+    resolve: github-release
+    url: github/codeql-cli-binaries
+    asset_regex: 'codeql-linux64\.zip$'
+    install_dir: /opt/codeql
+    symlinks:
+      - {src: /opt/codeql/current/codeql, dest: /usr/local/bin/codeql}
 
 rustup:
   # Rust toolchains (rustc/cargo). Components and targets are added to
@@ -481,7 +624,7 @@ rustup:
   default: stable
   components:
     - rust-src
-    - rust-analyzer             # rust-analyzer  (LSP; LazyVim uses it)
+    - rust-analyzer             # rust-analyzer  (LSP)
     - clippy                    # cargo clippy
     - rustfmt                   # cargo fmt
     - llvm-tools-preview        # cargo-llvm-cov etc.
@@ -553,6 +696,41 @@ git_sources:
       - make
       - sudo make install
 
+  - url: https://github.com/weggli-rs/weggli      # weggli 'strcpy($d,$s);' src/
+    dest: ~/src/weggli
+    branch: main
+    skip_if_command: weggli
+    # Google P0's semantic C/C++ grep — the fast way to sweep source for a
+    # bug class. Upstream ships NO prebuilt binaries, so it's built with
+    # cargo (rustup section). Unlike the C/C++ builds above, this fetches
+    # crates from the network AT BUILD TIME — it needs connectivity during
+    # install (or a warm ~/.cargo cache). Soft-fails so an offline run
+    # still completes; re-run once online to finish the build.
+    post_install:
+      - |
+        CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+        if "$CARGO" install --path . 2>/tmp/weggli-build.log; then
+          sudo ln -sf "$HOME/.cargo/bin/weggli" /usr/local/bin/weggli
+          echo "weggli installed -> /usr/local/bin/weggli"
+        else
+          echo "weggli build skipped (needs network for crates; see /tmp/weggli-build.log)" >&2
+        fi
+
+  - url: https://github.com/google/syzkaller      # kernel coverage-guided fuzzer
+    dest: ~/src/syzkaller
+    branch: master
+    # Host tools (bin/syz-*) for kernel LPE fuzzing. Needs the Go toolchain
+    # (tarballs) and, like weggli, pulls Go modules at build time — wants
+    # network during install. Binaries land in ~/src/syzkaller/bin; run
+    # syz-manager from the tree against your own .cfg. Soft-fails offline.
+    post_install:
+      - |
+        if command -v go >/dev/null 2>&1 && make 2>/tmp/syzkaller-build.log; then
+          echo "syzkaller built -> ~/src/syzkaller/bin"
+        else
+          echo "syzkaller build skipped (needs Go + network for modules; see /tmp/syzkaller-build.log)" >&2
+        fi
+
   - url: https://github.com/sullo/nikto          # nikto -h https://target
     dest: ~/src/nikto
     skip_if_command: nikto
@@ -612,6 +790,25 @@ git_sources:
     branch: master
     # angr is heavy — `pip install angr` in a venv for runtime. This
     # clone is for reading the source.
+
+  - url: https://github.com/joxeankoret/diaphora  # Ghidra/IDA binary diffing
+    dest: ~/src/diaphora
+    branch: master
+    # Pure-Python; no build step. Load diaphora.py from Ghidra (PyGhidra /
+    # Jython) or IDA to diff two databases. Pairs with bindiff for N-day
+    # patch analysis when you'd rather stay inside your decompiler.
+
+  - url: https://github.com/github/codeql         # CodeQL standard libraries + queries
+    dest: ~/src/codeql
+    branch: main
+    # The QL standard libraries and query suites for every language — the
+    # codeql CLI (tarballs) ships without them, so this checkout is what
+    # makes `codeql` usable offline. Point the CLI at it per-invocation:
+    #   codeql database analyze db/ --search-path ~/src/codeql <suite>.qls
+    # or persist it in ~/.config/codeql/config as `--search-path ...`.
+    # Keep the checkout roughly aligned with the installed CLI version
+    # (main tracks latest; `git checkout codeql-cli/vX.Y.Z` to pin). ~488MB
+    # server-side — shallow single-branch by default keeps the clone lean.
 
   # ── Wordlists / payload collections / cheat sheets ────────────────
   # SecLists alone is ~1 GB after clone. Shallow single-branch by
@@ -770,18 +967,3 @@ codium_extensions:
     - yzhang.markdown-all-in-one
     - DavidAnson.vscode-markdownlint
     - dracula-theme.theme-dracula
-
-neovim_offline:
-  # Air-gap-safe LazyVim bundle. The `prepare` phase runs stage.sh
-  # (downloads nvim/node/jdk, clones plugins, installs Mason servers,
-  # compiles treesitter parsers) into cache/neovim_offline/. The
-  # `install` phase runs install.sh, deploying to the invoking user's
-  # $HOME. See installers/neovim_offline/README.md for details.
-  enabled: true
-
-  # stage_mode:
-  #   all    — fetch tarballs + resolve plugins/mason/treesitter
-  #            (needs gcc/make/unzip on PATH; bootstrap.sh provides them)
-  #   fetch  — download tarballs only; skip headless nvim run
-  #   none   — skip staging; install still deploys from the cache if present
-  stage_mode: all

@@ -9,6 +9,7 @@ validation.
 
 ```
 sudo apt install qemu-system-x86 qemu-utils cloud-image-utils openssh-client rsync curl
+sudo apt install qemu-system-modules-spice virt-viewer   # for the `gui` command
 sudo adduser "$USER" kvm          # one-time; then log out/in
 ```
 
@@ -36,6 +37,7 @@ qcow2 overlay is recreated.
 | `sync`       | rsync the host repo into the running VM (after editing files on host).    |
 | `pull-cache` | rsync the VM's `cache/` back to the host (e.g. after prepare ran in VM).  |
 | `push-cache` | rsync the host's `cache/` into the VM (e.g. to seed an offline install). |
+| `gui`        | open the VM's graphical console in a SPICE viewer (see below).            |
 | `console`    | tail the QEMU serial-console log (useful for debugging boot hangs).       |
 | `status`     | is the VM running?                                                         |
 | `destroy`    | power off + remove overlay disk. Keeps base image + SSH keys.             |
@@ -50,7 +52,33 @@ qcow2 overlay is recreated.
 | `--memory N`     | 8       | guest RAM in GiB                                      |
 | `--cpus N`       | 4       | guest vCPUs                                           |
 | `--port N`       | 2222    | host port forwarded to guest :22                      |
+| `--spice-port N` | 5930    | host port for the SPICE graphical display             |
 | `--config PATH`  | repo vmconfig.yaml | substitute a different config into the VM |
+
+## Graphical console (`gui`)
+
+The VM always serves its virtio-vga display over SPICE on
+`spice://127.0.0.1:5930` (localhost-only, no ticket). `tests/run-vm.sh gui`
+attaches `remote-viewer` (falling back to `spicy`) to it, so you can watch
+the console during boot and drive the desktop after the installer sets one
+up.
+
+A note on **virt-manager**: virt-manager only lists libvirt-managed
+domains, so it cannot attach to this hand-launched QEMU process directly.
+`remote-viewer` ships in the `virt-viewer` package alongside virt-manager
+and embeds the exact same SPICE console widget — same window, same
+keyboard/clipboard integration. Any other SPICE client pointed at
+`spice://127.0.0.1:5930` works too.
+
+Clipboard sharing activates once `spice-vdagent` is installed in the guest
+(the QEMU side of the channel is already wired up).
+
+If QEMU reports no SPICE support at launch, install the display module and
+restart the VM (the overlay disk is kept, so nothing is reinstalled):
+
+```
+sudo apt install qemu-system-modules-spice
+```
 
 ## What happens inside `up`
 
@@ -62,8 +90,9 @@ qcow2 overlay is recreated.
    + `meta-data`, substituting the harness-generated SSH pubkey. The
    rendered `user-data`, `meta-data`, and `seed.iso` all stay in
    `tests/.vm/` for post-mortem debugging.
-4. Launch QEMU with the overlay, the seed ISO, virtio disk/net, and a
-   host-forward of `127.0.0.1:2222 → guest:22`.
+4. Launch QEMU with the overlay, the seed ISO, virtio disk/net, a
+   host-forward of `127.0.0.1:2222 → guest:22`, and a SPICE display on
+   `127.0.0.1:5930`.
 5. Wait for cloud-init to finish (`cloud-init status --wait`).
 6. Rsync this repo to `~tester/DevVMSetup/` (excluding `.git/`,
    `__pycache__/`, `cache/`, `tests/.vm/`).
@@ -107,8 +136,15 @@ nikto -h https://example.com | head
 responder --help 2>&1 | head
 enum4linux-ng --help 2>&1 | head
 
-# LazyVim bundle
-nvim --version && ls ~/.local/share/nvim/{lazy,mason,site} 2>/dev/null
+# Go toolchain (installed from tarballs)
+go version && gofmt --help >/dev/null && echo gofmt-ok
+
+# Node.js + npm (apt)
+node --version && npm --version
+
+# AI coding agents
+claude --version         # from the claude-code apt repo
+opencode --version       # from github_releases (offline-cacheable)
 ```
 
 ## Shuffling the cache between host and VM

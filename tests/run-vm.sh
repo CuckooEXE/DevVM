@@ -19,6 +19,14 @@
 #                (e.g. after running `setup.py --mode prepare` in the VM).
 #   push-cache   Rsync the host's cache/ directory into the VM
 #                (e.g. to seed an offline install from a prepared bundle).
+#   gui          Open the VM's graphical console. The VM always exposes a
+#                SPICE display on 127.0.0.1 (default port 5930); this command
+#                attaches remote-viewer (or spicy) to it. Note: virt-manager
+#                itself only lists libvirt-managed domains, so it can't attach
+#                to this hand-launched QEMU — remote-viewer ships in the
+#                `virt-viewer` package alongside virt-manager and gives you
+#                the same console window. Or connect any SPICE client to
+#                spice://127.0.0.1:5930 yourself.
 #   console      Tail the serial-console log (great for debugging boot hangs).
 #   status       Report whether the VM is running, its PID, and SSH port.
 #   destroy      Kill QEMU and remove the overlay disk. Base image + SSH keys
@@ -33,10 +41,12 @@
 #   --memory N       Guest RAM in GiB (default 8).
 #   --cpus N         Guest vCPUs (default 4).
 #   --port N         Host port forwarded to guest :22 (default 2222).
+#   --spice-port N   Host port for the SPICE display (default 5930).
 #   --config PATH    vmconfig.yaml to copy into the VM (default: repo root).
 #
 # Prereqs on the host (Debian 13 Trixie):
 #   sudo apt install qemu-system-x86 qemu-utils cloud-image-utils
+#   sudo apt install qemu-system-modules-spice virt-viewer   # for the `gui` command
 #
 # Everything the test creates lives under tests/.vm/ (gitignored).
 set -euo pipefail
@@ -50,6 +60,7 @@ CLOUD_INIT_DIR="$SCRIPT_DIR/cloud-init"
 DEFAULT_CPUS=4
 DEFAULT_MEM=8           # GiB
 DEFAULT_PORT=2222
+DEFAULT_SPICE_PORT=5930
 DEFAULT_DISK_SIZE=100    # GiB
 BASE_IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2"
 BASE_IMAGE_SHA_URL="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
@@ -62,6 +73,7 @@ SKIP_INSTALL=0
 MEM="$DEFAULT_MEM"
 CPUS="$DEFAULT_CPUS"
 PORT="$DEFAULT_PORT"
+SPICE_PORT="$DEFAULT_SPICE_PORT"
 CONFIG_YAML="$REPO_DIR/vmconfig.yaml"
 
 # --- terminal colors (only if stdout is a tty) -----------------------------
@@ -79,14 +91,17 @@ ok()   { printf '%s[ok]%s %s\n'    "$C_GRN"  "$C_RST" "$*" >&2; }
 # --- argv parsing ----------------------------------------------------------
 while (( $# )); do
     case "$1" in
-        up|boot|ssh|sync|pull-cache|push-cache|console|status|destroy|clean) COMMAND="$1"; shift ;;
+        up|boot|ssh|sync|pull-cache|push-cache|gui|console|status|destroy|clean) COMMAND="$1"; shift ;;
         --fresh)        FRESH=1; shift ;;
         --skip-install) SKIP_INSTALL=1; shift ;;
         --memory)       MEM="$2"; shift 2 ;;
         --cpus)         CPUS="$2"; shift 2 ;;
         --port)         PORT="$2"; shift 2 ;;
+        --spice-port)   SPICE_PORT="$2"; shift 2 ;;
         --config)       CONFIG_YAML="$2"; shift 2 ;;
-        -h|--help)      sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # Print the whole comment header (everything up to the first
+        # non-comment line) — a hardcoded line range rots as the header grows.
+        -h|--help)      awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; exit 0 ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
 done
@@ -130,6 +145,16 @@ preflight() {
         warn "missing tools: ${missing[*]}"
         warn "install with:  sudo apt install qemu-system-x86 qemu-utils cloud-image-utils openssh-client rsync curl"
         die  "preflight failed"
+    fi
+
+    # Debian ships QEMU's SPICE display as a separate module package. If it
+    # is missing, boot headless rather than failing the whole harness — the
+    # `gui` command's TCP probe will report the same hint at attach time.
+    SPICE_AVAILABLE=1
+    if ! qemu-system-x86_64 -spice help >/dev/null 2>&1; then
+        SPICE_AVAILABLE=0
+        warn "QEMU has no SPICE support — the 'gui' command won't work with this VM"
+        warn "fix with:  sudo apt install qemu-system-modules-spice   # then restart the VM"
     fi
 
     if [[ -r /dev/kvm && -w /dev/kvm ]]; then
@@ -239,7 +264,29 @@ start_qemu() {
         return
     fi
 
-    log "launching QEMU (accel=$ACCEL, cpus=$CPUS, mem=${MEM}G, ssh=127.0.0.1:$PORT)"
+    # Graphics: no local SDL/GTK window (-display none keeps the harness
+    # headless-friendly), but serve the guest's virtio-vga console over
+    # SPICE on localhost so `gui` / any SPICE client can attach.
+    # usb-tablet gives the viewer an absolute pointer; the vdagent
+    # virtserialport enables clipboard sharing once the guest runs
+    # spice-vdagent.
+    local spice_args=()
+    local spice_desc="off"
+    if (( SPICE_AVAILABLE )); then
+        # shellcheck disable=SC2054  # commas are QEMU option syntax, not element separators
+        spice_args=(
+            -vga virtio
+            -spice "port=${SPICE_PORT},addr=127.0.0.1,disable-ticketing=on"
+            -device qemu-xhci
+            -device usb-tablet
+            -device virtio-serial-pci
+            -chardev spicevmc,id=vdagent0,name=vdagent
+            -device virtserialport,chardev=vdagent0,name=com.redhat.spice.0
+        )
+        spice_desc="127.0.0.1:$SPICE_PORT"
+    fi
+
+    log "launching QEMU (accel=$ACCEL, cpus=$CPUS, mem=${MEM}G, ssh=127.0.0.1:$PORT, spice=$spice_desc)"
     # shellcheck disable=SC2086
     qemu-system-x86_64 \
         -name devvmsetup-test \
@@ -252,6 +299,7 @@ start_qemu() {
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${PORT}-:22" \
         -device virtio-net-pci,netdev=net0 \
         -display none \
+        "${spice_args[@]}" \
         -serial "file:$SERIAL_LOG" \
         -monitor "unix:$MONITOR_SOCK,server,nowait" \
         -pidfile "$PIDFILE" \
@@ -399,6 +447,33 @@ cmd_sync() {
     ok "repo synced — existing SSH sessions see the new files immediately"
 }
 
+cmd_gui() {
+    vm_running || die "VM is not running (did you run 'up' or 'boot' first?)"
+
+    # A VM started before SPICE support was added won't have a listener.
+    # Probe first so the failure mode is a clear message, not a viewer
+    # window that flashes and dies.
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$SPICE_PORT") 2>/dev/null; then
+        warn "nothing listening on spice://127.0.0.1:$SPICE_PORT"
+        warn "the running VM was likely started without a SPICE display."
+        die  "power it off (e.g. 'sudo poweroff' over ssh) and re-run '$0 up' — the overlay disk is kept, so no reinstall needed"
+    fi
+
+    local uri="spice://127.0.0.1:$SPICE_PORT"
+    # remote-viewer ships in the virt-viewer package (same SPICE widget
+    # virt-manager embeds); spicy is the bare spice-gtk client.
+    if command -v remote-viewer >/dev/null 2>&1; then
+        log "opening $uri with remote-viewer"
+        exec remote-viewer "$uri"
+    elif command -v spicy >/dev/null 2>&1; then
+        log "opening $uri with spicy"
+        exec spicy -h 127.0.0.1 -p "$SPICE_PORT"
+    fi
+    warn "no SPICE client found — install one with:  sudo apt install virt-viewer"
+    die  "or point any SPICE client at $uri"
+}
+
+# ---------------------------------------------------------------------------
 cmd_console() {
     [[ -f "$SERIAL_LOG" ]] || die "no serial log at $SERIAL_LOG"
     exec tail -n 200 -F "$SERIAL_LOG"
@@ -409,6 +484,7 @@ cmd_status() {
         ok "VM running — pid $(cat "$PIDFILE"), ssh 127.0.0.1:$PORT"
         log "serial log: $SERIAL_LOG"
         log "ssh cmd:    ssh ${ssh_opts[*]} tester@127.0.0.1"
+        log "gui:        $0 gui   (spice://127.0.0.1:$SPICE_PORT)"
     else
         warn "VM not running"
     fi
@@ -453,6 +529,7 @@ case "$COMMAND" in
     sync)       cmd_sync ;;
     pull-cache) cmd_pull_cache ;;
     push-cache) cmd_push_cache ;;
+    gui)      cmd_gui ;;
     console)  cmd_console ;;
     status)   cmd_status ;;
     destroy)  cmd_destroy ;;

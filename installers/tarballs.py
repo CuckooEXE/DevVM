@@ -9,6 +9,7 @@ from ._common import extract, http_download, latest_release, pick_asset, http_ge
 log = logging.getLogger("installers.tarballs")
 
 ZIG_TARGET = "x86_64-linux"  # TODO: derive from arch if needed
+GO_OS, GO_ARCH = "linux", "amd64"  # TODO: derive from arch if needed
 
 
 def _cache_dir(ctx, name: str, version: str) -> Path:
@@ -47,6 +48,31 @@ def _resolve(entry: dict, ctx) -> dict:
             "asset_name": target["tarball"].rsplit("/", 1)[-1],
             "asset_url": target["tarball"],
             "asset_size": int(target.get("size", 0)) or None,
+        }
+    elif resolve == "go-dl":
+        # go.dev/dl/?mode=json returns the current stable majors, newest
+        # first. Pick the newest stable release that ships a linux/amd64
+        # archive.
+        idx = http_get_json(entry["url"])
+        chosen = None
+        for release in idx:
+            if not release.get("stable", False):
+                continue
+            for f in release.get("files", []):
+                if (f.get("os") == GO_OS and f.get("arch") == GO_ARCH
+                        and f.get("kind") == "archive"):
+                    chosen = (release, f)
+                    break
+            if chosen:
+                break
+        if not chosen:
+            raise RuntimeError(f"go index has no stable {GO_OS}-{GO_ARCH} archive")
+        release, f = chosen
+        resolved = {
+            "version": release["version"],
+            "asset_name": f["filename"],
+            "asset_url": f"https://go.dev/dl/{f['filename']}",
+            "asset_size": int(f.get("size", 0)) or None,
         }
     elif resolve == "static":
         resolved = {

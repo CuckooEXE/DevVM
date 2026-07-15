@@ -98,7 +98,7 @@
         "properties": {
           "name":        {"type": "string"},
           "url":         {"type": "string"},
-          "resolve":     {"enum": ["static", "github-release", "zig-index"]},
+          "resolve":     {"enum": ["static", "github-release", "zig-index", "go-dl"]},
           "asset_regex": {"type": "string"},
           "install_dir": {"type": "string"},
           "strip_components":{"type": "integer", "minimum": 0},
@@ -190,17 +190,6 @@
       "additionalProperties": false,
       "properties": {
         "extensions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
-      }
-    },
-
-    "neovim_offline": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled":     {"type": "boolean"},
-        "stage_mode":  {"enum": ["all", "fetch", "none"]},
-        "bundle_dir":  {"type": "string"},
-        "home":        {"type": "string"}
       }
     }
   }

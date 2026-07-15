@@ -29,7 +29,6 @@ SECTION_ORDER = [
     "docs",
     "fonts",
     "codium_extensions",
-    "neovim_offline",
 ]
 
 log = logging.getLogger("setup")

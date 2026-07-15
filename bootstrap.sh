@@ -33,15 +33,12 @@ REQUIRED_APT=(
     gnupg
     # git_sources prepare uses `git clone --mirror`
     git
-    # neovim_offline prepare runs stage.sh before apt.install; it wants a C
-    # toolchain (gcc + libc headers so cgo can compile Go packages that pull
-    # in runtime/cgo), unzip for archives, make, and a Go toolchain so
-    # Mason can `go install` gopls/delve/goimports.
+    # Generic build/extract prereqs some prepare steps lean on: a C
+    # toolchain + headers and unzip for archive handling.
     unzip
     gcc
     make
     libc6-dev
-    golang-go
 )
 
 command -v sudo >/dev/null 2>&1 || {

@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -18,6 +20,16 @@ log = logging.getLogger("installers")
 
 DEFAULT_TIMEOUT = 60
 GITHUB_API = "https://api.github.com"
+
+# GitHub API rate-limit handling. Unauthenticated requests are capped at
+# 60/hour per IP; a token raises that to 5000/hour. We retry short,
+# transient (secondary) limits but refuse to block on the hourly reset.
+_API_RETRIES = 3
+_MAX_RATELIMIT_WAIT = 60  # seconds; longer than this → fail with guidance
+
+
+class GitHubRateLimit(RuntimeError):
+    """Raised when the GitHub API rate limit is hit and can't be waited out."""
 
 
 def dpkg_arch() -> str:
@@ -35,10 +47,67 @@ def _ua_headers() -> dict[str, str]:
     return h
 
 
+def _ratelimit_wait(err: urllib.error.HTTPError) -> float | None:
+    """Seconds to wait before retrying a rate-limited response.
+
+    Returns None when the response isn't a recognizable rate-limit (so the
+    caller re-raises it as a genuine error). Handles both the secondary
+    limit (Retry-After header) and the primary limit (X-RateLimit-Remaining
+    == 0 plus an X-RateLimit-Reset epoch).
+    """
+    retry_after = err.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+    if err.headers.get("X-RateLimit-Remaining") == "0":
+        reset = err.headers.get("X-RateLimit-Reset")
+        if reset:
+            try:
+                return max(0.0, float(reset) - time.time())
+            except ValueError:
+                return None
+        return 0.0
+    return None
+
+
 def http_get_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers=_ua_headers())
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-        return json.load(resp)
+    for attempt in range(_API_RETRIES + 1):
+        req = urllib.request.Request(url, headers=_ua_headers())
+        try:
+            with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code not in (403, 429):
+                raise
+            wait = _ratelimit_wait(e)
+            if wait is None:
+                raise  # a 403/429 that isn't a rate limit (auth, etc.)
+            authed = bool(os.environ.get("GITHUB_TOKEN")
+                          or os.environ.get("GH_TOKEN"))
+            if wait > _MAX_RATELIMIT_WAIT or attempt == _API_RETRIES:
+                hint = ("set GITHUB_TOKEN (or GH_TOKEN) to raise the limit "
+                        "to 5000/hour" if not authed else
+                        "wait for the window to reset or reduce request volume")
+                reset = e.headers.get("X-RateLimit-Reset")
+                when = ""
+                if reset:
+                    try:
+                        secs = int(float(reset) - time.time())
+                        when = f" (resets in ~{max(0, secs)}s)"
+                    except ValueError:
+                        pass
+                raise GitHubRateLimit(
+                    f"GitHub API rate limit hit for {url}{when}. {hint}. "
+                    "Progress so far is saved to vmconfig.lock — re-run "
+                    "prepare to continue where it left off."
+                ) from e
+            log.warning("GitHub rate limited; retrying in %.0fs (attempt %d/%d)",
+                        wait, attempt + 1, _API_RETRIES)
+            time.sleep(wait)
+    # Loop exhausts only via the raise above; keep type-checkers happy.
+    raise GitHubRateLimit(f"GitHub API rate limit hit for {url}")
 
 
 def http_download(url: str, dest: Path, *, expected_size: int | None = None) -> Path:

@@ -65,6 +65,13 @@ class Context:
         env.setdefault("USER", pw.pw_name)
         env.setdefault("HOME", pw.pw_dir)
         env.setdefault("LOGNAME", pw.pw_name)
+        # Expose the Rust toolchain to every child process. rustup installs
+        # with --no-modify-path, so pip/pipx source builds that need cargo
+        # (NetExec -> aardwolf, etc.) can't find it otherwise. No-ops when no
+        # toolchain (cache or deployed) is present, and phase-aware: the
+        # prepare-phase cache tree, then the deployed $HOME/.cargo at install.
+        from installers import rustup
+        env.update(rustup.toolchain_env(self, env.get("PATH", "")))
         return subprocess.run(
             cmd, check=check, env=env,
             stdout=subprocess.PIPE if capture else None,
@@ -186,10 +193,16 @@ def main(argv: list[str] | None = None) -> int:
         log.info("skipping section(s): %s", ", ".join(args.skip))
 
     if ctx.phase_prepare():
-        for section in sections:
-            if section in config:
-                dispatch(section, config[section], ctx, "prepare")
-        write_lock(ctx)
+        # Persist the lock even if a section raises (e.g. a GitHub API rate
+        # limit mid-resolve). Every version resolved before the failure is
+        # saved, so a re-run skips those API calls and continues from where
+        # it left off instead of starting over and hitting the wall again.
+        try:
+            for section in sections:
+                if section in config:
+                    dispatch(section, config[section], ctx, "prepare")
+        finally:
+            write_lock(ctx)
 
     if ctx.phase_install():
         for section in sections:

@@ -1,0 +1,45 @@
+#cloud-config
+# Default cloud-init seed for `vm-manager create --cloud-init`.
+# vm-manager renders these @@TOKENS@@ before building the NoCloud seed ISO:
+#   @@HOSTNAME@@     the VM name (or --hostname)
+#   @@USERNAME@@     the guest login (or --user; defaults to the invoking user)
+#   @@SSH_PUBKEY@@   the invoking user's first ~/.ssh/*.pub key
+#   @@INSTANCE_ID@@  the VM name (cloud-init instance id)
+# Copy this dir and point --cloud-init at your copy to customize.
+
+hostname: @@HOSTNAME@@
+preserve_hostname: false
+
+# Grow the root filesystem to fill whatever we resized the qcow2 to.
+growpart:
+  mode: auto
+  devices: ['/']
+  ignore_growroot_disabled: false
+resize_rootfs: true
+
+users:
+  - name: @@USERNAME@@
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "@@SSH_PUBKEY@@"
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+package_upgrade: false
+packages:
+  - openssh-server
+  - rsync
+  - sudo
+  - qemu-guest-agent
+  - ca-certificates
+
+runcmd:
+  - systemctl enable --now ssh
+  - systemctl enable --now qemu-guest-agent
+
+final_message: "cloud-init finished after $UPTIME seconds (@@HOSTNAME@@)"

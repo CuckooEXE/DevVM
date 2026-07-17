@@ -27,6 +27,7 @@ target, then run `install` there.
 ```bash
 # on a connected machine — fills cache/ with everything:
 ./bootstrap.sh full               # installs host prereqs + caches their .debs
+export GITHUB_TOKEN=ghp_...        # optional: 5000/hr vs 60/hr API limit
 python3 setup.py --mode prepare   # caches every artifact under cache/*/
 
 # ship repo + cache to the target, then on the target:
@@ -39,6 +40,12 @@ transitive `.deb` closure, pipx builds wheels locally, rustup stages a
 full `~/.rustup` tree into the cache, and Codium extensions pre-fetch
 `.vsix` bundles from Open VSX. See `vmconfig.yaml` section-by-section for
 details.
+
+`prepare` resolves the latest release of many tools from the GitHub API.
+Unauthenticated that's capped at 60 requests/hour, so set `GITHUB_TOKEN`
+to avoid hitting it. If you do hit the limit, resolved versions are saved
+to `vmconfig.lock` as it goes — just re-run `prepare` and it continues
+from where it stopped.
 
 `./bootstrap.sh --help` and `python3 setup.py --help` print the full
 flag and subcommand lists.

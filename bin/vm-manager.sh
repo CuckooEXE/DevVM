@@ -1,16 +1,29 @@
 #!/usr/bin/env bash
-# vm-manager — thin libvirt + cloud-init wrapper for dev/test VMs.
+# vm-manager — libvirt-backed VM lifecycle manager for dev/test VMs.
 #
-# Bootstraps from a cloud-image qcow2 + a generated cloud-init seed ISO,
-# manages snapshots/clones/power, and wraps `virsh domifaddr` for SSH.
-# Designed for `qemu:///system` with the `default` network + pool.
+# Create VMs from a cloud-image qcow2 (imported + resized) or an installer
+# ISO (blank disk + boot media), manage snapshots, transfer files, and get
+# a shell/console/GUI. Targets `qemu:///system` with the `default` network
+# + storage pool by default.
 #
-# Requires: libvirt-clients, virtinst, cloud-image-utils, qemu-utils,
-# genisoimage (or xorriso). Run as a member of the `libvirt` group;
-# disk-creation steps escalate via sudo as needed.
+# Requires: libvirt-clients, virtinst, qemu-utils, and — for --cloud-init —
+# cloud-image-utils (cloud-localds) or genisoimage. `gui` uses virt-manager
+# (falls back to virt-viewer); `ssh`/`push`/`pull` use openssh + rsync.
+# Run as a member of the `libvirt` group; disk steps escalate via sudo.
 set -euo pipefail
 
 SCRIPT_NAME="vm-manager"
+
+# Resolve the real directory of this script (following symlinks), so we can
+# locate the bundled cloud-init/ dir whether run from the repo or from the
+# installed /usr/local/bin/vm-manager symlink/copy.
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_REAL_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 
 # ─── defaults / env knobs ────────────────────────────────────────────
 LIBVIRT_URI="${LIBVIRT_URI:-qemu:///system}"
@@ -19,13 +32,12 @@ NETWORK="${VM_MANAGER_NETWORK:-default}"
 DEFAULT_MEM_MIB=4096
 DEFAULT_VCPUS=2
 DEFAULT_DISK_GIB=40
-# `--osinfo detect=on,require=off` lets virt-install sniff the cloud
-# image's metadata and pick the right machine knobs without us having
-# to know the guest distro up front.
+# `--osinfo detect=on,require=off` lets virt-install sniff the image's
+# metadata and pick machine knobs without us knowing the guest distro.
 DEFAULT_OS_VARIANT="detect=on,require=off"
 
-# Use `"${SUDO[@]}" cmd` so it's a no-op when running as root and
-# expands to `sudo cmd` otherwise.
+# Use `"${SUDO[@]}" cmd` so it's a no-op as root and expands to `sudo cmd`
+# otherwise.
 if [[ $EUID -eq 0 ]]; then
     SUDO=()
 else
@@ -47,21 +59,59 @@ virsh_q() { virsh -c "$LIBVIRT_URI" "$@"; }
 
 vm_exists() { virsh_q dominfo "$1" >/dev/null 2>&1; }
 
+vm_running() {
+    [[ "$(virsh_q domstate "$1" 2>/dev/null || true)" == "running" ]]
+}
+
 pool_path() {
     virsh_q pool-dumpxml "$POOL" 2>/dev/null \
         | sed -n 's|.*<path>\(.*\)</path>.*|\1|p' \
         | head -n1
 }
 
-# True if the named pool has zero volumes.
+# Normalize a disk-size argument (e.g. 40, 100G, 80GB) to a bare GiB int.
+normalize_gib() {
+    local v="$1"
+    v="${v%[Bb]}"        # trailing B / b
+    v="${v%[Gg]}"        # trailing G / g
+    [[ "$v" =~ ^[0-9]+$ ]] \
+        || err "invalid disk size '$1' (use e.g. 40 or 100G)"
+    printf '%s' "$v"
+}
+
+# Best-effort guest IPv4: DHCP lease table first (no guest agent needed),
+# then the qemu-guest-agent source (static IPs / non-libvirt networks).
+guest_ip() {
+    local name="$1" ip=""
+    ip=$(virsh_q domifaddr "$name" 2>/dev/null \
+            | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1) || true
+    if [[ -z "$ip" ]]; then
+        ip=$(virsh_q domifaddr "$name" --source agent 2>/dev/null \
+                | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1) || true
+    fi
+    printf '%s' "$ip"
+}
+
+# Output: each *.pub key on its own line, blanks dropped, deduped.
+# shellcheck disable=SC2120  # arg is optional; callers may omit it
+collect_ssh_keys() {
+    local src="${1:-$(real_home)/.ssh}"
+    [[ -d "$src" ]] || return 0
+    local keys=()
+    shopt -s nullglob
+    for f in "$src"/*.pub; do keys+=("$f"); done
+    shopt -u nullglob
+    (( ${#keys[@]} > 0 )) || return 0
+    awk 'NF && !seen[$0]++' "${keys[@]}"
+}
+
+# ─── pool / network pruning (used by delete + prune) ─────────────────
 pool_is_empty() {
-    local pool="$1"
-    local n
+    local pool="$1" n
     n=$(virsh_q vol-list "$pool" --details 2>/dev/null | awk 'NR>2 && NF' | wc -l)
     [[ "$n" -eq 0 ]]
 }
 
-# True if no defined domain references the named network.
 network_unused() {
     local net="$1" doms d
     doms="$(virsh_q list --all --name 2>/dev/null | awk 'NF')"
@@ -76,7 +126,6 @@ network_unused() {
     return 0
 }
 
-# Tear down a pool if it's non-default and empty. Idempotent.
 maybe_prune_pool() {
     local pool="$1"
     [[ "$pool" == "default" ]] && return 0
@@ -88,7 +137,6 @@ maybe_prune_pool() {
     fi
 }
 
-# Tear down a network if it's non-default and unused.
 maybe_prune_network() {
     local net="$1"
     [[ "$net" == "default" ]] && return 0
@@ -100,8 +148,6 @@ maybe_prune_network() {
     fi
 }
 
-# Echo, one per line: pool names that hold a disk attached to <name>.
-# Must be called BEFORE undefine — disk volume metadata vanishes after.
 domain_pools_used() {
     local name="$1" path pool
     virsh_q dumpxml "$name" 2>/dev/null \
@@ -114,7 +160,6 @@ domain_pools_used() {
           done | sort -u
 }
 
-# Echo, one per line: networks attached to <name>.
 domain_networks_used() {
     local name="$1"
     virsh_q dumpxml "$name" 2>/dev/null \
@@ -123,99 +168,179 @@ domain_networks_used() {
         | sort -u
 }
 
-# Output: each *.pub key on its own line, blanks dropped, deduped.
-collect_ssh_keys() {
-    local src="${1:-$(real_home)/.ssh}"
-    [[ -d "$src" ]] || return 0
-    local keys=()
-    shopt -s nullglob
-    for f in "$src"/*.pub; do keys+=("$f"); done
-    shopt -u nullglob
-    (( ${#keys[@]} > 0 )) || return 0
-    awk 'NF && !seen[$0]++' "${keys[@]}"
+# ─── cloud-init seed ─────────────────────────────────────────────────
+# Resolve the default cloud-init dir: env override, then the installed
+# share dir, then the repo-relative dir next to this script.
+default_cloud_init_dir() {
+    if [[ -n "${VM_MANAGER_CLOUD_INIT_DIR:-}" ]]; then
+        printf '%s' "$VM_MANAGER_CLOUD_INIT_DIR"; return 0
+    fi
+    local d
+    for d in "$SCRIPT_REAL_DIR/../share/vm-manager/cloud-init" \
+             "$SCRIPT_REAL_DIR/../cloud-init"; do
+        if [[ -d "$d" ]]; then (cd "$d" && pwd); return 0; fi
+    done
+    return 1
+}
+
+# Render a cloud-init source file, substituting @@TOKENS@@. The pubkey is
+# escaped for sed's replacement side (it can carry '/', '&', '\', etc.).
+render_ci() {
+    local file="$1" hostname="$2" guser="$3" instance="$4" pub="$5"
+    local pub_esc
+    pub_esc="$(printf '%s' "$pub" | sed -e 's/[&|\\]/\\&/g')"
+    sed \
+        -e "s|@@SSH_PUBKEY@@|${pub_esc}|g" \
+        -e "s|@@HOSTNAME@@|${hostname}|g" \
+        -e "s|@@USERNAME@@|${guser}|g" \
+        -e "s|@@INSTANCE_ID@@|${instance}|g" \
+        "$file"
+}
+
+# Build a NoCloud seed ISO from a cloud-init dir into $out_iso.
+# Honors user-data[.tmpl], meta-data[.tmpl] (synthesized if absent), and an
+# optional network-config.
+build_seed_iso() {
+    local ci_dir="$1" name="$2" hostname="$3" guser="$4" out_iso="$5"
+    [[ -d "$ci_dir" ]] || err "cloud-init dir not found: $ci_dir"
+    require_cmd cloud-localds
+
+    local pub
+    pub="$(collect_ssh_keys | head -n1)" || true
+    [[ -z "$pub" ]] && warn "no SSH pubkey found for $(real_user); guest may be key-less"
+
+    local tmp
+    tmp="$(mktemp -d -t "$SCRIPT_NAME-seed-XXXXXX")"
+
+    # user-data is mandatory.
+    if [[ -f "$ci_dir/user-data.tmpl" ]]; then
+        render_ci "$ci_dir/user-data.tmpl" "$hostname" "$guser" "$name" "$pub" > "$tmp/user-data"
+    elif [[ -f "$ci_dir/user-data" ]]; then
+        render_ci "$ci_dir/user-data" "$hostname" "$guser" "$name" "$pub" > "$tmp/user-data"
+    else
+        rm -rf "$tmp"
+        err "cloud-init dir '$ci_dir' has no user-data or user-data.tmpl"
+    fi
+
+    # meta-data: render if present, else synthesize a minimal one.
+    if [[ -f "$ci_dir/meta-data.tmpl" ]]; then
+        render_ci "$ci_dir/meta-data.tmpl" "$hostname" "$guser" "$name" "$pub" > "$tmp/meta-data"
+    elif [[ -f "$ci_dir/meta-data" ]]; then
+        render_ci "$ci_dir/meta-data" "$hostname" "$guser" "$name" "$pub" > "$tmp/meta-data"
+    else
+        printf 'instance-id: %s\nlocal-hostname: %s\n' "$name" "$hostname" > "$tmp/meta-data"
+    fi
+
+    local lds_args=("$out_iso" "$tmp/user-data" "$tmp/meta-data")
+    if [[ -f "$ci_dir/network-config" ]]; then
+        render_ci "$ci_dir/network-config" "$hostname" "$guser" "$name" "$pub" > "$tmp/network-config"
+        lds_args=(--network-config "$tmp/network-config" "${lds_args[@]}")
+    fi
+
+    cloud-localds "${lds_args[@]}"
+    rm -rf "$tmp"
 }
 
 # ─── help ────────────────────────────────────────────────────────────
 cmd_help() {
 cat <<EOF
-$SCRIPT_NAME — manage dev/test VMs via libvirt.
+$SCRIPT_NAME — libvirt VM lifecycle manager.
 
 Usage:
-  $SCRIPT_NAME help
-  $SCRIPT_NAME bootstrap <name> <base-image.qcow2> [flags]
-  $SCRIPT_NAME ssh <name> [ssh args...]
-  $SCRIPT_NAME snapshot create  <name> <snap>
-  $SCRIPT_NAME snapshot restore <name> <snap>
-  $SCRIPT_NAME snapshot list    <name>
-  $SCRIPT_NAME clone create <name> <new-name>
-  $SCRIPT_NAME power <on|off|force-off|reboot|reset|pause|resume|status> <name>
+  $SCRIPT_NAME create <name> <image.qcow2|installer.iso> [flags]
   $SCRIPT_NAME delete <name> [-y|--yes] [--prune]
-  $SCRIPT_NAME prune [-y|--yes] [-n|--dry-run]
+  $SCRIPT_NAME snapshot create  <name> <snap>
+  $SCRIPT_NAME snapshot list    <name>
+  $SCRIPT_NAME snapshot delete  <name> <snap>
+  $SCRIPT_NAME snapshot restore <name> <snap>
+  $SCRIPT_NAME ssh     <name> [ssh args...]
+  $SCRIPT_NAME gui     <name>
+  $SCRIPT_NAME console <name>
+  $SCRIPT_NAME push    <name> <src> <dst>
+  $SCRIPT_NAME pull    <name> <src> <dst>
+  $SCRIPT_NAME power   <on|off|force-off|reboot|reset|pause|resume|status> <name>
+  $SCRIPT_NAME clone   <name> <new-name>
+  $SCRIPT_NAME prune   [-y|--yes] [-n|--dry-run]
 
-bootstrap flags:
-  -m, --memory MIB         RAM in MiB           (default: $DEFAULT_MEM_MIB)
-  -c, --vcpus  N           vCPUs                (default: $DEFAULT_VCPUS)
-  -d, --disk-size GIB      virtual disk, GiB    (default: $DEFAULT_DISK_GIB)
-  -u, --user NAME          guest username       (default: invoking user)
-  -p, --password PASS      guest password       (default: locked, SSH-only)
-      --hostname NAME      guest hostname       (default: <name>)
-      --ssh-keys-from DIR  glob 'DIR/*.pub' for authorized_keys
-                           (default: ~/.ssh of invoking user)
-      --no-ssh-keys        skip SSH key injection
+create flags:
+      --cpu N              vCPUs                 (default: $DEFAULT_VCPUS)
+      --mem MIB            RAM in MiB            (default: $DEFAULT_MEM_MIB)
+      --disk SIZE          virtual disk (e.g. 100G / 40)   (default: ${DEFAULT_DISK_GIB}G)
+      --cloud-init [DIR]   seed cloud-init from DIR
+                           (default: bundled cloud-init/; \$VM_MANAGER_CLOUD_INIT_DIR)
+      --user NAME          guest username token  (default: invoking user)
+      --hostname NAME      guest hostname        (default: <name>)
       --os-variant ID      virt-install --osinfo (default: $DEFAULT_OS_VARIANT)
 
+  The image type is inferred from the extension: *.qcow2/*.img/*.raw are
+  imported + resized; *.iso boots as installer media on a fresh blank disk.
+
 env knobs:
-  LIBVIRT_URI            (default: qemu:///system)
-  VM_MANAGER_POOL        storage pool name      (default: default)
-  VM_MANAGER_NETWORK     libvirt network name   (default: default)
+  LIBVIRT_URI              (default: qemu:///system)
+  VM_MANAGER_POOL          storage pool name     (default: default)
+  VM_MANAGER_NETWORK       libvirt network name  (default: default)
+  VM_MANAGER_CLOUD_INIT_DIR  default --cloud-init dir
 
 Examples:
-  $SCRIPT_NAME bootstrap dev01 ~/images/debian-13-genericcloud-amd64.qcow2
-  $SCRIPT_NAME bootstrap rev-bench ~/images/kali.qcow2 -m 8192 -c 4 -d 80
-  $SCRIPT_NAME ssh dev01
+  $SCRIPT_NAME create dev01 ~/images/debian-13-genericcloud-amd64.qcow2 --cloud-init
+  $SCRIPT_NAME create win ~/isos/win.iso --cpu 4 --mem 8192 --disk 120G
   $SCRIPT_NAME snapshot create dev01 clean-baseline
-  $SCRIPT_NAME power off dev01
+  $SCRIPT_NAME push dev01 ./exploit.py /tmp/exploit.py
+  $SCRIPT_NAME ssh dev01
 EOF
 }
 
-# ─── bootstrap ───────────────────────────────────────────────────────
-cmd_bootstrap() {
-    local name="" base=""
+# ─── create ──────────────────────────────────────────────────────────
+cmd_create() {
+    local name="" source=""
     local mem="$DEFAULT_MEM_MIB" vcpus="$DEFAULT_VCPUS" disk_gib="$DEFAULT_DISK_GIB"
-    local guest_user="" password="" hostname=""
-    local ssh_keys_from="" no_ssh_keys=0
-    local os_variant="$DEFAULT_OS_VARIANT"
+    local guest_user="" hostname="" os_variant="$DEFAULT_OS_VARIANT"
+    local cloud_init=0 cloud_init_dir=""
 
-    [[ $# -ge 2 ]] || err "bootstrap: need <name> <base-image.qcow2>"
-    name="$1"; base="$2"; shift 2
+    [[ $# -ge 2 ]] || err "create: need <name> <image.qcow2|installer.iso>"
+    name="$1"; source="$2"; shift 2
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -m|--memory)        mem="$2"; shift 2 ;;
-            -c|--vcpus)         vcpus="$2"; shift 2 ;;
-            -d|--disk-size)     disk_gib="$2"; shift 2 ;;
-            -u|--user)          guest_user="$2"; shift 2 ;;
-            -p|--password)      password="$2"; shift 2 ;;
+            --cpu|-c|--vcpus)   vcpus="$2"; shift 2 ;;
+            --mem|-m|--memory)  mem="$2"; shift 2 ;;
+            --disk|-d|--disk-size) disk_gib="$(normalize_gib "$2")"; shift 2 ;;
+            --cloud-init)
+                cloud_init=1
+                # Optional inline dir: consume the next token only if it
+                # isn't another flag. (No positionals follow flags here.)
+                if [[ $# -ge 2 && "$2" != -* ]]; then
+                    cloud_init_dir="$2"; shift 2
+                else
+                    shift
+                fi
+                ;;
+            --cloud-init-dir)   cloud_init=1; cloud_init_dir="$2"; shift 2 ;;
+            --user|-u)          guest_user="$2"; shift 2 ;;
             --hostname)         hostname="$2"; shift 2 ;;
-            --ssh-keys-from)    ssh_keys_from="$2"; shift 2 ;;
-            --no-ssh-keys)      no_ssh_keys=1; shift ;;
             --os-variant)       os_variant="$2"; shift 2 ;;
             -h|--help)          cmd_help; return 0 ;;
-            *)                  err "bootstrap: unknown flag '$1'" ;;
+            *)                  err "create: unknown flag '$1'" ;;
         esac
     done
 
     : "${guest_user:=$(real_user)}"
     : "${hostname:=$name}"
 
-    [[ -r "$base" ]] || err "base image not readable: $base"
+    [[ -r "$source" ]] || err "image not readable: $source"
     require_cmd virsh
     require_cmd virt-install
-    require_cmd cloud-localds
     require_cmd qemu-img
 
+    local kind
+    case "${source,,}" in
+        *.iso)                       kind=iso ;;
+        *.qcow2|*.img|*.raw|*.qed)   kind=disk ;;
+        *) err "can't infer image type from '$source' (want .qcow2/.img/.raw or .iso)" ;;
+    esac
+
     if vm_exists "$name"; then
-        err "VM '$name' already exists (use 'power off' + 'virsh undefine $name')"
+        err "VM '$name' already exists (delete it first: $SCRIPT_NAME delete $name)"
     fi
 
     local pool_dir
@@ -225,125 +350,89 @@ cmd_bootstrap() {
 
     local disk="$pool_dir/$name.qcow2"
     local seed_dest="$pool_dir/$name-seed.iso"
+    local iso_dest="$pool_dir/$name-cdrom.iso"
     [[ -e "$disk" ]] && err "disk already exists: $disk"
-    [[ -e "$seed_dest" ]] && err "seed iso already exists: $seed_dest"
 
-    # Cleanup partial state on failure. Set BOOTSTRAP_OK=1 at the very
-    # end so a successful run skips the rollback.
-    local tmp BOOTSTRAP_OK=0
-    tmp="$(mktemp -d -t "$SCRIPT_NAME-XXXXXX")"
-    cleanup_bootstrap() {
+    # Resolve cloud-init dir up front so we fail fast before staging disks.
+    if (( cloud_init )); then
+        if [[ -z "$cloud_init_dir" ]]; then
+            cloud_init_dir="$(default_cloud_init_dir)" \
+                || err "no cloud-init dir found (pass --cloud-init <DIR> or set VM_MANAGER_CLOUD_INIT_DIR)"
+        fi
+        [[ -d "$cloud_init_dir" ]] || err "cloud-init dir not found: $cloud_init_dir"
+    elif [[ "$kind" == disk ]]; then
+        warn "no --cloud-init: '$name' will have no injected user/SSH key (cloud images have no default login)"
+    fi
+
+    # Rollback partial state on failure; set CREATE_OK=1 at the very end.
+    local CREATE_OK=0
+    cleanup_create() {
         local rc=$?
-        if (( BOOTSTRAP_OK != 1 )); then
-            warn "bootstrap aborted; rolling back"
+        if (( CREATE_OK != 1 )); then
+            warn "create aborted; rolling back"
             virsh_q destroy  "$name" >/dev/null 2>&1 || true
             virsh_q undefine "$name" --remove-all-storage >/dev/null 2>&1 || true
-            "${SUDO[@]}" rm -f "$disk" "$seed_dest" 2>/dev/null || true
+            "${SUDO[@]}" rm -f "$disk" "$seed_dest" "$iso_dest" 2>/dev/null || true
         fi
-        rm -rf "$tmp"
         exit "$rc"
     }
-    trap cleanup_bootstrap EXIT
+    trap cleanup_create EXIT
 
-    # ─── 1. stage the disk: full copy of base, then resize ───────────
-    log "creating disk $disk from $base (${disk_gib}G)"
-    "${SUDO[@]}" qemu-img convert -O qcow2 -p "$base" "$disk"
-    "${SUDO[@]}" qemu-img resize "$disk" "${disk_gib}G"
-
-    # ─── 2. write cloud-init user-data + meta-data ───────────────────
-    local user_data="$tmp/user-data" meta_data="$tmp/meta-data"
-
-    {
-        echo "#cloud-config"
-        echo "hostname: $hostname"
-        echo "manage_etc_hosts: true"
-        echo "users:"
-        echo "  - name: $guest_user"
-        echo "    sudo: 'ALL=(ALL) NOPASSWD:ALL'"
-        echo "    shell: /bin/bash"
-        if (( no_ssh_keys == 0 )); then
-            local key_src="${ssh_keys_from:-$(real_home)/.ssh}"
-            local keys
-            keys="$(collect_ssh_keys "$key_src")" || true
-            if [[ -z "$keys" ]]; then
-                warn "no *.pub keys found in $key_src; '$guest_user' will be SSH-key-less"
-            else
-                echo "    ssh_authorized_keys:"
-                while IFS= read -r line; do
-                    [[ -n "$line" ]] || continue
-                    # Quote with double-quotes; `"` inside ssh keys is
-                    # not a thing in practice, but escape just in case.
-                    printf '      - "%s"\n' "${line//\"/\\\"}"
-                done <<< "$keys"
-            fi
-        fi
-        if [[ -n "$password" ]]; then
-            echo "    lock_passwd: false"
-            echo "ssh_pwauth: true"
-            echo "chpasswd:"
-            echo "  expire: false"
-            echo "  list: |"
-            echo "    $guest_user:$password"
-        else
-            echo "    lock_passwd: true"
-            echo "ssh_pwauth: false"
-        fi
-    } > "$user_data"
-
-    {
-        echo "instance-id: $name"
-        echo "local-hostname: $hostname"
-    } > "$meta_data"
-
-    # ─── 3. build the seed ISO + place it in the pool dir ────────────
-    local seed_tmp="$tmp/seed.iso"
-    cloud-localds "$seed_tmp" "$user_data" "$meta_data"
-    "${SUDO[@]}" install -m 0644 "$seed_tmp" "$seed_dest"
-
-    # ─── 4. virt-install --import ────────────────────────────────────
-    log "defining + starting VM '$name' (${mem}MiB / ${vcpus}vCPU / ${disk_gib}G)"
-    "${SUDO[@]}" virt-install \
-        --connect "$LIBVIRT_URI" \
-        --name "$name" \
-        --memory "$mem" \
-        --vcpus "$vcpus" \
-        --osinfo "$os_variant" \
-        --disk "path=$disk,format=qcow2,bus=virtio" \
-        --disk "path=$seed_dest,device=cdrom" \
-        --network "network=$NETWORK,model=virtio" \
-        --import \
-        --noautoconsole \
-        --graphics none
-
-    BOOTSTRAP_OK=1
-    log "VM '$name' booted; cloud-init still running. Try '$SCRIPT_NAME ssh $name' in ~30s."
-}
-
-# ─── ssh ─────────────────────────────────────────────────────────────
-cmd_ssh() {
-    [[ $# -ge 1 ]] || err "ssh: need <name>"
-    local name="$1"; shift
-
-    vm_exists "$name" || err "VM '$name' doesn't exist"
-    [[ "$(virsh_q domstate "$name" 2>/dev/null || true)" == "running" ]] \
-        || err "VM '$name' is not running (try 'power on $name')"
-
-    # Lease table first (works without qemu-guest-agent), then agent
-    # (works for static IPs / non-libvirt-managed networks).
-    local ip=""
-    ip=$(virsh_q domifaddr "$name" 2>/dev/null \
-            | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1) || true
-    if [[ -z "$ip" ]]; then
-        ip=$(virsh_q domifaddr "$name" --source agent 2>/dev/null \
-                | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1) || true
+    # ─── stage the primary disk ──────────────────────────────────────
+    if [[ "$kind" == disk ]]; then
+        log "importing disk $disk from $source (resize → ${disk_gib}G)"
+        "${SUDO[@]}" qemu-img convert -O qcow2 -p "$source" "$disk"
+        "${SUDO[@]}" qemu-img resize "$disk" "${disk_gib}G"
+    else
+        log "creating blank disk $disk (${disk_gib}G)"
+        "${SUDO[@]}" qemu-img create -q -f qcow2 "$disk" "${disk_gib}G"
     fi
-    [[ -n "$ip" ]] \
-        || err "no IP for '$name' yet (wait for DHCP, or install qemu-guest-agent in the guest)"
 
-    local user
-    user="$(real_user)"
-    log "ssh $user@$ip $*"
-    exec ssh "$user@$ip" "$@"
+    # ─── build install args ──────────────────────────────────────────
+    local install_args=(
+        --connect "$LIBVIRT_URI"
+        --name "$name"
+        --memory "$mem"
+        --vcpus "$vcpus"
+        --osinfo "$os_variant"
+        --disk "path=$disk,format=qcow2,bus=virtio"
+        --network "network=$NETWORK,model=virtio"
+        --graphics spice
+        --noautoconsole
+    )
+
+    if (( cloud_init )); then
+        log "seeding cloud-init from $cloud_init_dir"
+        local seed_tmp
+        seed_tmp="$(mktemp -t "$SCRIPT_NAME-seed-XXXXXX.iso")"
+        build_seed_iso "$cloud_init_dir" "$name" "$hostname" "$guest_user" "$seed_tmp"
+        "${SUDO[@]}" install -m 0644 "$seed_tmp" "$seed_dest"
+        rm -f "$seed_tmp"
+        install_args+=(--disk "path=$seed_dest,device=cdrom")
+    fi
+
+    if [[ "$kind" == iso ]]; then
+        # Copy the installer into the pool so qemu:///system can read it
+        # regardless of where the source lived.
+        log "staging installer ISO → $iso_dest"
+        "${SUDO[@]}" install -m 0644 "$source" "$iso_dest"
+        install_args+=(--disk "path=$iso_dest,device=cdrom,boot.order=1")
+        install_args+=(--disk "path=$disk,boot.order=2")  # ensure HD is bootable post-install
+    else
+        install_args+=(--import)
+    fi
+
+    log "defining + starting '$name' (${mem}MiB / ${vcpus}vCPU / ${disk_gib}G / $kind)"
+    "${SUDO[@]}" virt-install "${install_args[@]}"
+
+    CREATE_OK=1
+    if [[ "$kind" == iso ]]; then
+        log "'$name' booted from installer. Run '$SCRIPT_NAME gui $name' to complete setup."
+    elif (( cloud_init )); then
+        log "'$name' booted; cloud-init running. Try '$SCRIPT_NAME ssh $name' in ~30s."
+    else
+        log "'$name' booted. Use '$SCRIPT_NAME console $name' to log in."
+    fi
 }
 
 # ─── snapshot ────────────────────────────────────────────────────────
@@ -353,40 +442,107 @@ cmd_snapshot() {
         create)
             shift
             [[ $# -ge 2 ]] || err "snapshot create: need <name> <snap>"
+            vm_exists "$1" || err "VM '$1' doesn't exist"
             virsh_q snapshot-create-as --domain "$1" --name "$2"
-            ;;
-        restore)
-            shift
-            [[ $# -ge 2 ]] || err "snapshot restore: need <name> <snap>"
-            virsh_q snapshot-revert --domain "$1" --snapshotname "$2"
             ;;
         list)
             shift
             [[ $# -ge 1 ]] || err "snapshot list: need <name>"
+            vm_exists "$1" || err "VM '$1' doesn't exist"
             virsh_q snapshot-list --domain "$1"
             ;;
+        delete|rm)
+            shift
+            [[ $# -ge 2 ]] || err "snapshot delete: need <name> <snap>"
+            vm_exists "$1" || err "VM '$1' doesn't exist"
+            virsh_q snapshot-delete --domain "$1" --snapshotname "$2"
+            ;;
+        restore|revert)
+            shift
+            [[ $# -ge 2 ]] || err "snapshot restore: need <name> <snap>"
+            vm_exists "$1" || err "VM '$1' doesn't exist"
+            virsh_q snapshot-revert --domain "$1" --snapshotname "$2"
+            ;;
         ""|-h|--help) cmd_help ;;
-        *) err "snapshot: unknown subcommand '$sub' (use create|restore|list)" ;;
+        *) err "snapshot: unknown subcommand '$sub' (use create|list|delete|restore)" ;;
     esac
 }
 
-# ─── clone ───────────────────────────────────────────────────────────
-cmd_clone() {
-    local sub="${1:-}"
-    case "$sub" in
-        create)
-            shift
-            [[ $# -ge 2 ]] || err "clone create: need <name> <new-name>"
-            require_cmd virt-clone
-            local src="$1" dst="$2"
-            vm_exists "$src" || err "source VM '$src' doesn't exist"
-            vm_exists "$dst" && err "target VM '$dst' already exists"
-            "${SUDO[@]}" virt-clone --connect "$LIBVIRT_URI" \
-                --original "$src" --name "$dst" --auto-clone
-            ;;
-        ""|-h|--help) cmd_help ;;
-        *) err "clone: unknown subcommand '$sub' (use create)" ;;
-    esac
+# ─── ssh ─────────────────────────────────────────────────────────────
+cmd_ssh() {
+    [[ $# -ge 1 ]] || err "ssh: need <name>"
+    local name="$1"; shift
+    vm_exists "$name" || err "VM '$name' doesn't exist"
+    vm_running "$name" || err "VM '$name' is not running (try '$SCRIPT_NAME power on $name')"
+    require_cmd ssh
+
+    local ip; ip="$(guest_ip "$name")"
+    [[ -n "$ip" ]] \
+        || err "no IP for '$name' yet (wait for DHCP, or install qemu-guest-agent in the guest)"
+    local user; user="$(real_user)"
+    log "ssh $user@$ip $*"
+    exec ssh "$user@$ip" "$@"
+}
+
+# ─── gui ─────────────────────────────────────────────────────────────
+cmd_gui() {
+    [[ $# -ge 1 ]] || err "gui: need <name>"
+    local name="$1"
+    vm_exists "$name" || err "VM '$name' doesn't exist"
+    if command -v virt-manager >/dev/null 2>&1; then
+        log "opening virt-manager console for '$name'"
+        exec virt-manager --connect "$LIBVIRT_URI" --show-domain-console "$name"
+    elif command -v virt-viewer >/dev/null 2>&1; then
+        warn "virt-manager not found; using virt-viewer"
+        exec virt-viewer --connect "$LIBVIRT_URI" "$name"
+    else
+        err "neither virt-manager nor virt-viewer found (apt install virt-manager)"
+    fi
+}
+
+# ─── console ─────────────────────────────────────────────────────────
+cmd_console() {
+    [[ $# -ge 1 ]] || err "console: need <name>"
+    local name="$1"; shift
+    vm_exists "$name" || err "VM '$name' doesn't exist"
+    log "attaching serial console to '$name' (escape: Ctrl-])"
+    exec virsh_q console "$name" "$@"
+}
+
+# ─── push / pull ─────────────────────────────────────────────────────
+_transfer() {
+    local dir="$1" name="$2" a="$3" b="$4"   # dir = push|pull
+    vm_exists "$name" || err "VM '$name' doesn't exist"
+    vm_running "$name" || err "VM '$name' is not running (try '$SCRIPT_NAME power on $name')"
+
+    local ip; ip="$(guest_ip "$name")"
+    [[ -n "$ip" ]] || err "no IP for '$name' yet (wait for DHCP / qemu-guest-agent)"
+    local user; user="$(real_user)"
+
+    local tool
+    if command -v rsync >/dev/null 2>&1; then tool=rsync
+    elif command -v scp >/dev/null 2>&1; then tool=scp
+    else err "need rsync or scp on PATH"; fi
+
+    if [[ "$dir" == push ]]; then
+        log "$tool $a → $user@$ip:$b"
+        if [[ "$tool" == rsync ]]; then exec rsync -avz -e ssh "$a" "$user@$ip:$b"
+        else exec scp -r "$a" "$user@$ip:$b"; fi
+    else
+        log "$tool $user@$ip:$a → $b"
+        if [[ "$tool" == rsync ]]; then exec rsync -avz -e ssh "$user@$ip:$a" "$b"
+        else exec scp -r "$user@$ip:$a" "$b"; fi
+    fi
+}
+
+cmd_push() {
+    [[ $# -ge 3 ]] || err "push: need <name> <src> <dst>"
+    _transfer push "$1" "$2" "$3"
+}
+
+cmd_pull() {
+    [[ $# -ge 3 ]] || err "pull: need <name> <src> <dst>"
+    _transfer pull "$1" "$2" "$3"
 }
 
 # ─── power ───────────────────────────────────────────────────────────
@@ -405,6 +561,17 @@ cmd_power() {
         status|state)       virsh_q domstate "$name" ;;
         *) err "power: unknown action '$action' (on|off|force-off|reboot|reset|pause|resume|status)" ;;
     esac
+}
+
+# ─── clone ───────────────────────────────────────────────────────────
+cmd_clone() {
+    [[ $# -ge 2 ]] || err "clone: need <name> <new-name>"
+    require_cmd virt-clone
+    local src="$1" dst="$2"
+    vm_exists "$src" || err "source VM '$src' doesn't exist"
+    vm_exists "$dst" && err "target VM '$dst' already exists"
+    "${SUDO[@]}" virt-clone --connect "$LIBVIRT_URI" \
+        --original "$src" --name "$dst" --auto-clone
 }
 
 # ─── delete ──────────────────────────────────────────────────────────
@@ -426,26 +593,22 @@ cmd_delete() {
 
     if (( force == 0 )); then
         printf '[%s] delete VM %q and all its disks/snapshots? [y/N] ' "$SCRIPT_NAME" "$name" >&2
-        local ans
-        read -r ans
+        local ans; read -r ans
         [[ "$ans" =~ ^[Yy]$ ]] || { log "aborted"; return 1; }
     fi
 
-    # Capture pool/network references BEFORE undefine — domain XML and
-    # volume metadata disappear after `undefine --remove-all-storage`.
+    # Capture pool/network refs + pool dir BEFORE undefine — domain XML and
+    # volume metadata vanish after --remove-all-storage.
+    local pool_dir; pool_dir="$(pool_path)" || true
     local pools_used=() nets_used=() line
     if (( prune == 1 )); then
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && pools_used+=("$line")
-        done < <(domain_pools_used "$name")
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && nets_used+=("$line")
-        done < <(domain_networks_used "$name")
+        while IFS= read -r line; do [[ -n "$line" ]] && pools_used+=("$line"); done \
+            < <(domain_pools_used "$name")
+        while IFS= read -r line; do [[ -n "$line" ]] && nets_used+=("$line"); done \
+            < <(domain_networks_used "$name")
     fi
 
-    # Force-off if running/paused so undefine can proceed.
-    local state
-    state="$(virsh_q domstate "$name" 2>/dev/null || true)"
+    local state; state="$(virsh_q domstate "$name" 2>/dev/null || true)"
     case "$state" in
         running|paused|"in shutdown")
             log "destroying running VM '$name'"
@@ -453,7 +616,7 @@ cmd_delete() {
             ;;
     esac
 
-    # Internal qcow2 snapshots block undefine; clean them up first.
+    # Internal qcow2 snapshots block undefine; clean them first.
     local snaps
     snaps="$(virsh_q snapshot-list --name --domain "$name" 2>/dev/null | awk 'NF')"
     if [[ -n "$snaps" ]]; then
@@ -466,11 +629,14 @@ cmd_delete() {
 
     log "undefining VM '$name' + removing all storage"
     local extra=(--managed-save --snapshots-metadata --checkpoints-metadata --remove-all-storage)
-    # `--nvram` is required for UEFI domains (else undefine refuses) but
-    # may be rejected on older libvirt for non-UEFI domains. Try with,
-    # fall back without.
     virsh_q undefine "$name" "${extra[@]}" --nvram 2>/dev/null \
         || virsh_q undefine "$name" "${extra[@]}"
+
+    # Best-effort sweep of seed/installer media create left in the pool dir
+    # (these aren't always tracked as removable domain storage).
+    if [[ -n "$pool_dir" ]]; then
+        "${SUDO[@]}" rm -f "$pool_dir/$name-seed.iso" "$pool_dir/$name-cdrom.iso" 2>/dev/null || true
+    fi
 
     if (( prune == 1 )); then
         local p n
@@ -503,22 +669,17 @@ cmd_prune() {
     done < <(virsh_q net-list --all --name 2>/dev/null | awk 'NF')
 
     if (( ${#empty_pools[@]} == 0 && ${#unused_nets[@]} == 0 )); then
-        log "nothing to prune"
-        return 0
+        log "nothing to prune"; return 0
     fi
 
     log "candidates:"
-    (( ${#empty_pools[@]} > 0 )) && log "  empty pools:    ${empty_pools[*]}"
+    (( ${#empty_pools[@]} > 0 )) && log "  empty pools:     ${empty_pools[*]}"
     (( ${#unused_nets[@]} > 0 )) && log "  unused networks: ${unused_nets[*]}"
-
-    if (( dry == 1 )); then
-        return 0
-    fi
+    (( dry == 1 )) && return 0
 
     if (( force == 0 )); then
         printf '[%s] tear them all down? [y/N] ' "$SCRIPT_NAME" >&2
-        local ans
-        read -r ans
+        local ans; read -r ans
         [[ "$ans" =~ ^[Yy]$ ]] || { log "aborted"; return 1; }
     fi
 
@@ -528,19 +689,21 @@ cmd_prune() {
 
 # ─── dispatch ────────────────────────────────────────────────────────
 main() {
-    if [[ $# -eq 0 ]]; then
-        cmd_help
-        return 0
-    fi
+    if [[ $# -eq 0 ]]; then cmd_help; return 0; fi
     local cmd="$1"; shift
     case "$cmd" in
         help|-h|--help)  cmd_help ;;
-        bootstrap)       cmd_bootstrap "$@" ;;
-        ssh)             cmd_ssh "$@" ;;
-        snapshot)        cmd_snapshot "$@" ;;
-        clone)           cmd_clone "$@" ;;
-        power)           cmd_power "$@" ;;
+        create)          cmd_create "$@" ;;
+        bootstrap)       warn "'bootstrap' renamed to 'create'"; cmd_create "$@" ;;
         delete|destroy)  cmd_delete "$@" ;;
+        snapshot|snap)   cmd_snapshot "$@" ;;
+        ssh)             cmd_ssh "$@" ;;
+        gui)             cmd_gui "$@" ;;
+        console)         cmd_console "$@" ;;
+        push)            cmd_push "$@" ;;
+        pull)            cmd_pull "$@" ;;
+        power)           cmd_power "$@" ;;
+        clone)           cmd_clone "$@" ;;
         prune)           cmd_prune "$@" ;;
         *) err "unknown command '$cmd' — run '$SCRIPT_NAME help'" ;;
     esac

@@ -41,7 +41,15 @@ def install(section: dict, ctx) -> None:
         log.info("all %d pip_system packages already importable", len(packages))
         return
 
-    base = ["pip3", "install", "--break-system-packages"]
+    # --ignore-installed: don't try to uninstall the existing (often
+    # apt-managed) copy of a dependency before replacing it. Debian packages
+    # carry no pip RECORD file, so pip's uninstall step dies with
+    # "uninstall-no-record-file" the moment a pin forces a version change
+    # (e.g. miasm wants pyparsing 2.4.7 over the system's python3-pyparsing).
+    # On Debian, --break-system-packages installs into /usr/local/.../dist-
+    # packages, which already shadows the apt dir on sys.path, so we never
+    # actually need to remove the distro copy — just install over it.
+    base = ["pip3", "install", "--break-system-packages", "--ignore-installed"]
     if cache.is_dir() and any(cache.iterdir()):
         # Offline-cache mode: some packages (r2pipe, rzpipe) ship only sdists.
         # Building them in pip's default isolated venv requires network access

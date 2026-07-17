@@ -252,6 +252,7 @@ apt:
     - curl                      # curl -sSL https://example.com
     - wget                      # wget -c https://...
     - rsync                     # rsync -avz src/ host:dest/
+    - openssh-client            # ssh/scp; tests/run-vm.sh SSHes into the VM
     - git                       # git status
     - git-lfs                   # git lfs track '*.bin'
     - unzip                     # unzip file.zip
@@ -282,6 +283,15 @@ apt:
     - dnsmasq-base              # libvirt's NAT DHCP/DNS for the default net
     - genisoimage               # ISO 9660 builder used by cloud-localds
 
+    # ── Nested VM test harness (tests/run-vm.sh) ─────────────────────
+    # So the DevVM can itself boot the DevVMSetup QEMU test harness
+    # (requires nested KVM on the outer host). qemu-system-x86 / qemu-utils
+    # / cloud-image-utils / rsync / curl / openssh-client above cover the
+    # rest of run-vm.sh's prereqs; these two add the `gui` (SPICE) command.
+    - qemu-system-modules-spice # -spice display support for run-vm.sh
+    - virt-viewer               # remote-viewer SPICE client for `run-vm.sh gui`
+    - virt-manager              # GUI console for `vm-manager gui <name>`
+
     # ── Web admin console (Cockpit) ──────────────────────────────────
     # Browser server console on https://<host>:9090 (socket-activated by
     # post/62-cockpit.sh). cockpit-machines drives the libvirt stack above
@@ -292,10 +302,27 @@ apt:
     - cockpit-storaged          # disks / LVM / filesystems
     - cockpit-networkmanager    # interfaces / bridges / firewall
 
+    # ── Graphical desktop (XFCE on Xorg) ─────────────────────────────
+    # The live X :0 session that the noVNC stack below shares. Without a
+    # desktop + display manager here, x11vnc has no :0 to attach to (it
+    # fails on launch) and the noVNC page connects to nothing. lightdm
+    # brings :0 up at boot; post/65-xfce-autologin.sh drops in an autologin
+    # so an XFCE session runs headlessly without a greeter login. NB: the
+    # apt section installs with --no-install-recommends, so anything that
+    # would normally arrive via Recommends (e.g. the terminal) is listed
+    # explicitly.
+    - xorg                      # X server + drivers (provides :0)
+    - xfce4                     # XFCE desktop (session, panel, wm, thunar…)
+    - xfce4-terminal            # terminal emulator (Recommends of xfce4)
+    - xfce4-goodies             # panel plugins / applets / extras
+    - lightdm                   # display manager: starts X :0 at boot
+    - dbus-x11                   # dbus-launch for the X session
+
     # ── Browser remote desktop (noVNC stack) ─────────────────────────
-    # Use the live XFCE (X11) desktop from a browser tab — no Docker, no
-    # Java. x11vnc shares the real :0 session over VNC; websockify bridges
-    # WebSocket<->TCP and serves the noVNC HTML5 client. Data path:
+    # Use the live XFCE (X11) desktop (above) from a browser tab — no
+    # Docker, no Java. x11vnc shares the real :0 session over VNC;
+    # websockify bridges WebSocket<->TCP and serves the noVNC HTML5 client.
+    # Data path:
     #   browser (noVNC) --ws--> websockify --tcp/RFB--> x11vnc --> :0
     # post/64-novnc.sh installs x11vnc.service + novnc.service (systemd)
     # so it survives reboot. Browse to http://<host>:6080/vnc.html.

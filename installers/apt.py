@@ -101,19 +101,23 @@ def install(section: dict, ctx) -> None:
     if deb_files:
         log.info("installing %d apt packages from local .deb cache (%d files)",
                  len(missing), len(deb_files))
-        # dpkg -i doesn't resolve deps by itself, but feeding it every
-        # cached .deb at once lets it sort them in dep order. Stragglers
-        # are patched up by `apt-get install -f`, pointed at our local
-        # cache so it doesn't need the network.
+        # Install the whole cached closure through apt-get, NOT raw `dpkg -i`.
+        # `dpkg -i *.deb` processes files in argv order and cannot satisfy
+        # Pre-Depends that sort later on the command line — it bails with
+        # "pre-dependency problem - not installing <pkg>", and once enough
+        # pile up dpkg hits its error ceiling ("too many errors, stopping"),
+        # aborting the transaction in a state `apt-get -f install` can't
+        # recover. Handing every .deb to apt as a local file lets apt compute
+        # a correct unpack/configure order (Pre-Depends included) and resolve
+        # deps among the cached files. `--no-download` keeps it offline: prepare
+        # cached the full transitive closure, so a genuinely missing dep now
+        # fails loudly here instead of silently cascading.
         ctx.run(
             ["env", "DEBIAN_FRONTEND=noninteractive",
-             "dpkg", "-i", *[str(p) for p in deb_files]],
-            sudo=True, check=False,
-        )
-        ctx.run(
-            ["env", "DEBIAN_FRONTEND=noninteractive",
-             "apt-get", "install", "-y", "-f", "--no-download",
-             "-o", f"Dir::Cache::Archives={debs}"],
+             "apt-get", "install", "-y",
+             "--no-install-recommends", "--allow-downgrades", "--no-download",
+             "-o", f"Dir::Cache::Archives={debs}",
+             *[str(p) for p in deb_files]],
             sudo=True,
         )
     else:

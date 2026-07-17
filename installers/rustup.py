@@ -41,6 +41,41 @@ def _invoking_user() -> tuple[str, str]:
     return name, home
 
 
+def toolchain_env(ctx, base_path: str = "") -> dict[str, str]:
+    """Env overrides that expose the Rust toolchain to a child process.
+
+    Package builds triggered by pip/pipx shell out to ``cargo``/``rustc`` via
+    PEP 517 (e.g. NetExec pulls in aardwolf, which builds a Rust extension).
+    rustup installs with ``--no-modify-path``, so those binaries are never on
+    PATH unless we add them, and the proxies in ``cargo/bin`` additionally need
+    ``RUSTUP_HOME``/``CARGO_HOME`` pointed at wherever the toolchains actually
+    live or they abort with "toolchain 'stable' is not installed".
+
+    Prefers the deployed home tree (``$HOME/.cargo``, populated at install
+    time); falls back to the prepare-phase cache tree. Returns ``{}`` when
+    neither exists, so callers can unconditionally merge the result.
+    """
+    _, cache_rustup_home, cache_cargo_home = _cache_roots(ctx)
+    _, user_home = _invoking_user()
+    home = Path(user_home)
+    home_cargo, home_rustup = home / ".cargo", home / ".rustup"
+
+    if (home_cargo / "bin" / "cargo").exists():
+        cargo_home, rustup_home = home_cargo, home_rustup
+    elif (cache_cargo_home / "bin" / "cargo").exists():
+        cargo_home, rustup_home = cache_cargo_home, cache_rustup_home
+    else:
+        return {}
+
+    bin_dir = str(cargo_home / "bin")
+    path = os.pathsep.join([bin_dir, base_path]) if base_path else bin_dir
+    return {
+        "PATH": path,
+        "CARGO_HOME": str(cargo_home),
+        "RUSTUP_HOME": str(rustup_home),
+    }
+
+
 def prepare(section: dict, ctx) -> None:
     toolchains = section.get("toolchains", ["stable"]) or ["stable"]
     default = section.get("default", toolchains[0])

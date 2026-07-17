@@ -41,10 +41,50 @@ REQUIRED_APT=(
     libc6-dev
 )
 
-command -v sudo >/dev/null 2>&1 || {
-    echo "bootstrap: sudo is required" >&2
+# ---------------------------------------------------------------------------
+# The rest of this script (and setup.py) leans on passwordless sudo for its
+# many privileged apt/install calls. If sudo is missing or still asks this
+# user for a password, drop a NOPASSWD rule into /etc/sudoers.d/ — done as
+# root via `su`, so it prompts once for the root password instead of failing
+# on every sudo call downstream.
+ensure_passwordless_sudo() {
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        return 0
+    fi
+
+    echo "bootstrap: passwordless sudo is not available for '$USER'." >&2
+    echo "bootstrap: writing /etc/sudoers.d/$USER — enter the ROOT password when prompted." >&2
+
+    # Run everything that needs root in one su invocation (one password
+    # prompt). If sudo isn't installed we install it first, since the rest of
+    # bootstrap needs the binary regardless of the sudoers rule. visudo -cf
+    # validates the drop-in before it can take effect; a bad file is removed
+    # so we never leave sudo in a state that locks the user out.
+    su root -c "$(cat <<EOF
+set -e
+if ! command -v sudo >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y sudo
+fi
+echo "$USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USER
+chmod 0440 /etc/sudoers.d/$USER
+if ! visudo -cf /etc/sudoers.d/$USER; then
+    rm -f /etc/sudoers.d/$USER
+    echo "bootstrap: generated sudoers file failed validation; removed it." >&2
     exit 1
+fi
+EOF
+)"
+
+    if ! sudo -n true 2>/dev/null; then
+        echo "bootstrap: still cannot run sudo without a password; aborting." >&2
+        exit 1
+    fi
+    echo "bootstrap: passwordless sudo configured for '$USER'."
 }
+
+ensure_passwordless_sudo
 
 MODE="${1:-full}"
 case "$MODE" in
